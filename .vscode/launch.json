@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Serve Helix Studio + open browser",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:4060",
+      "webRoot": "${workspaceFolder}/web",
+      "preLaunchTask": "Serve Helix Studio"
+    }
+  ]
+}

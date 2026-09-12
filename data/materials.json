@@ -1,0 +1,149 @@
+{
+  "machine": "Epilog Mini / Helix",
+  "wattColumn": 30,
+  "source": "Epilog Mini/Helix Suggested Material Settings datasheet (30 watt column)",
+  "notation": "speed = % (0-100), power = % (0-100); dpi for engraving; freq = Hz for cutting/vector. Values are Epilog's suggested starting points — always test on scrap.",
+  "materials": [
+    {
+      "name": "Acrylic",
+      "notes": "Cast acrylic frosts white when engraved; extruded is better for smooth-edged cutting. For cleaner cut edges, move focus ~0.03\" (0.76 mm) closer to the lens. Two passes help on thicker stock.",
+      "operations": [
+        { "label": "Photo Engraving", "type": "engrave", "dpi": 300, "speed": 90, "power": 60 },
+        { "label": "Text/Clipart Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 80 },
+        { "label": "Text/Clipart Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 90, "power": 75 },
+        { "label": "Cutting 1/8\" (3 mm)", "type": "cut", "freq": 5000, "speed": 9, "power": 100, "thickness_mm": 3.0 },
+        { "label": "Cutting 1/4\" (6 mm)", "type": "cut", "freq": 5000, "speed": 5, "power": 100, "thickness_mm": 6.0 }
+      ]
+    },
+    {
+      "name": "Alumamark",
+      "operations": [
+        { "label": "Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 55 },
+        { "label": "Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 90, "power": 45 }
+      ]
+    },
+    {
+      "name": "Anodized Aluminum",
+      "notes": "Text looks best at 600 DPI; photos/clipart engrave with great detail too.",
+      "operations": [
+        { "label": "Photos/Clipart (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 55 },
+        { "label": "Photos/Clipart (600 DPI)", "type": "engrave", "dpi": 600, "speed": 90, "power": 50 },
+        { "label": "Text (600 DPI)", "type": "engrave", "dpi": 600, "speed": 90, "power": 60 }
+      ]
+    },
+    {
+      "name": "Cork",
+      "operations": [
+        { "label": "Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 50 },
+        { "label": "Cutting", "type": "cut", "freq": 500, "speed": 25, "power": 50 }
+      ]
+    },
+    {
+      "name": "Cotton",
+      "notes": "For fabric, try converting the graphic to 80% gray with Jarvis dithering.",
+      "operations": [
+        { "label": "Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 30 }
+      ]
+    },
+    {
+      "name": "Denim",
+      "operations": [
+        { "label": "Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 35 }
+      ]
+    },
+    {
+      "name": "Fleece",
+      "notes": "For fabric, try 80% gray with Jarvis dithering; test a swatch first.",
+      "operations": [
+        { "label": "Engraving (150 DPI)", "type": "engrave", "dpi": 150, "speed": 90, "power": 35 },
+        { "label": "Cutting", "type": "cut", "freq": 2500, "speed": 25, "power": 25 }
+      ]
+    },
+    {
+      "name": "Glass",
+      "notes": "Try 80% gray + Jarvis dithering; a thin film of dish soap diffuses the surface and reduces chipping.",
+      "operations": [
+        { "label": "Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 15, "power": 100 }
+      ]
+    },
+    {
+      "name": "Leather",
+      "operations": [
+        { "label": "Photo Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 40 },
+        { "label": "Text/Clipart Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 90, "power": 50 },
+        { "label": "Cutting 1/8\" (3 mm)", "type": "cut", "freq": 500, "speed": 30, "power": 80, "thickness_mm": 3.0 }
+      ]
+    },
+    {
+      "name": "Mat Board",
+      "notes": "Bottom-up engraving is suggested for mat board etching.",
+      "operations": [
+        { "label": "Engraving (400 DPI)", "type": "engrave", "dpi": 400, "speed": 70, "power": 100 },
+        { "label": "Cutting", "type": "cut", "freq": 500, "speed": 20, "power": 50 }
+      ]
+    },
+    {
+      "name": "Marble",
+      "notes": "Every marble differs — start low and increase power on a second run.",
+      "operations": [
+        { "label": "Photo Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 55 },
+        { "label": "Text Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 90, "power": 65 }
+      ]
+    },
+    {
+      "name": "Painted Brass",
+      "operations": [
+        { "label": "Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 45 },
+        { "label": "Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 90, "power": 40 }
+      ]
+    },
+    {
+      "name": "Plastics",
+      "notes": "Works well with many plastics including phone cases; even single-color plastics can achieve results.",
+      "operations": [
+        { "label": "Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 40 }
+      ]
+    },
+    {
+      "name": "Plastic (2-Layer Engraveable)",
+      "operations": [
+        { "label": "Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 90, "power": 80 },
+        { "label": "Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 90, "power": 70 },
+        { "label": "Cutting 1/8\" (3 mm)", "type": "cut", "freq": 5000, "speed": 15, "power": 100, "thickness_mm": 3.0 }
+      ]
+    },
+    {
+      "name": "Rubber Stamps",
+      "operations": [
+        { "label": "Engraving (400 DPI)", "type": "engrave", "dpi": 400, "speed": 6, "power": 100 },
+        { "label": "Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 16, "power": 100 },
+        { "label": "Cutting", "type": "cut", "freq": 100, "speed": 10, "power": 100 }
+      ]
+    },
+    {
+      "name": "Stainless Steel w/ Cermark",
+      "operations": [
+        { "label": "Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 20, "power": 100 }
+      ]
+    },
+    {
+      "name": "Twill",
+      "operations": [
+        { "label": "Cutting", "type": "cut", "freq": 2500, "speed": 50, "power": 50 }
+      ]
+    },
+    {
+      "name": "Wood",
+      "notes": "Multiple passes allow cutting thicker stock; you can readjust focus between passes.",
+      "operations": [
+        { "label": "Photo Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 40, "power": 100 },
+        { "label": "Clipart/Text Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 30, "power": 100 },
+        { "label": "Clipart/Text Engraving (300 DPI)", "type": "engrave", "dpi": 300, "speed": 25, "power": 100 },
+        { "label": "Deep Engraving (600 DPI)", "type": "engrave", "dpi": 600, "speed": 10, "power": 100 },
+        { "label": "Thin Veneer", "type": "cut", "freq": 500, "speed": 30, "power": 22 },
+        { "label": "Cutting 1/8\" (3 mm)", "type": "cut", "freq": 500, "speed": 25, "power": 100, "thickness_mm": 3.0 },
+        { "label": "Cutting 1/4\" (6 mm)", "type": "cut", "freq": 500, "speed": 8, "power": 100, "thickness_mm": 6.0 }
+      ]
+    }
+  ]
+}

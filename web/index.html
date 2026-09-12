@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Helix Studio</title>
+<style>
+  :root{
+    --bg:#14151a; --panel:#1d1f27; --panel2:#262933; --line:#333644;
+    --ink:#e8e9ee; --muted:#9297a8; --accent:#7bd88f; --accent2:#6aa8ff;
+    --warn:#ffb454; --danger:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);
+    font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    display:flex;flex-direction:column}
+  header{display:flex;align-items:center;gap:14px;padding:10px 18px;
+    background:var(--panel);border-bottom:1px solid var(--line)}
+  header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.3px}
+  header h1 span{color:var(--muted);font-weight:400}
+  .spacer{flex:1}
+  .pill{font-size:12px;color:var(--muted);background:var(--panel2);
+    border:1px solid var(--line);border-radius:20px;padding:4px 12px}
+  .pill b{color:var(--accent)}
+  main{flex:1;display:flex;gap:0;overflow:hidden}
+  .left{flex:1;padding:22px;overflow:auto;display:flex;align-items:flex-start;
+    justify-content:center}
+  .right{width:420px;flex-shrink:0;border-left:1px solid var(--line);
+    background:var(--panel);padding:18px;overflow:auto}
+
+  .drop{border:2px dashed var(--line);border-radius:12px;padding:60px 30px;
+    text-align:center;color:var(--muted);width:100%;max-width:520px;cursor:pointer}
+  .drop.hot{border-color:var(--accent2);color:var(--ink)}
+  .stage{position:relative;background:
+    repeating-conic-gradient(#1a1c23 0 25%,#191b21 0 50%) 50%/28px 28px;
+    border:1px solid var(--line);border-radius:10px;padding:16px;display:none}
+  .stage.on{display:block}
+  .stage img{display:block;max-width:100%;max-height:70vh;background:#fff;
+    border-radius:4px}
+
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);
+    margin:0 0 10px}
+  .section{margin-bottom:22px}
+  label.f{display:block;font-size:12px;color:var(--muted);margin:0 0 4px}
+  select,input[type=number],input[type=text]{width:100%;background:var(--panel2);
+    color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font:inherit}
+  .row{display:flex;gap:10px}
+  .row>div{flex:1}
+  .layer{border:1px solid var(--line);border-radius:9px;padding:12px;margin-bottom:10px;
+    background:var(--panel2)}
+  .layer .top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .swatch{width:22px;height:22px;border-radius:5px;border:1px solid #0006;flex-shrink:0}
+  .layer .cov{font-size:11px;color:var(--muted)}
+  .layer .grid4{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+  .layer.ignored{opacity:.5}
+  button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid var(--line);
+    background:var(--panel2);color:var(--ink);padding:9px 14px}
+  button:hover{border-color:#55607a}
+  .send{width:100%;background:var(--accent2);color:#06122b;border-color:var(--accent2);
+    font-weight:600;padding:12px;font-size:15px;margin-top:6px}
+  .send:disabled{opacity:.45;cursor:not-allowed}
+  .ghost{background:transparent}
+  .toggle{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+  .out{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:12px;
+    background:#0c0d11;border:1px solid var(--line);border-radius:8px;padding:10px;
+    margin-top:10px;max-height:180px;overflow:auto;display:none}
+  .out.on{display:block}
+  .warn{color:var(--warn);font-size:12px}
+  .muted{color:var(--muted)}
+  a.reset{color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline}
+</style>
+</head>
+<body>
+<header>
+  <h1>Helix Studio <span>· PDF → laser</span></h1>
+  <span class="pill" id="laserPill">laser —</span>
+  <div class="spacer"></div>
+  <span class="pill" id="pagePill" style="display:none"></span>
+  <a class="reset" id="resetBtn" style="display:none">start over</a>
+</header>
+
+<main>
+  <div class="left">
+    <div class="drop" id="drop">
+      <p style="font-size:16px;margin:0 0 6px">Drop a PDF here</p>
+      <p class="muted" style="margin:0">or click to choose · the artwork for your coasters / panels</p>
+      <input type="file" id="file" accept="application/pdf" hidden />
+    </div>
+    <div class="stage" id="stage"><img id="preview" alt="preview" /></div>
+  </div>
+
+  <div class="right">
+    <div class="section">
+      <h2>Material</h2>
+      <select id="material"><option value="">— choose material —</option></select>
+      <p class="muted" id="matNotes" style="font-size:12px;margin:8px 0 0"></p>
+    </div>
+
+    <div class="section" id="layersSection" style="display:none">
+      <h2>Layers (by colour)</h2>
+      <div id="layers"></div>
+    </div>
+
+    <div class="section" id="placeSection" style="display:none">
+      <h2>Placement</h2>
+      <div class="row">
+        <div><label class="f">X offset (mm)</label><input type="number" id="offx" value="0" step="1"></div>
+        <div><label class="f">Y offset (mm)</label><input type="number" id="offy" value="0" step="1"></div>
+      </div>
+      <div class="row" style="margin-top:10px;align-items:center">
+        <div><label class="f">Laser host</label><input type="text" id="host"></div>
+        <div style="flex:0 0 auto;padding-top:18px">
+          <label class="toggle"><input type="checkbox" id="autofocus"> autofocus</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="sendSection" style="display:none">
+      <label class="toggle" style="margin-bottom:10px">
+        <input type="checkbox" id="dryrun" checked> dry-run (build jobs, don't send)</label>
+      <button class="send" id="sendBtn">Build jobs</button>
+      <p class="warn" id="sendWarn" style="margin:10px 0 0">
+        Sent jobs only queue — the laser fires when you press GO on the machine.
+      </p>
+      <div class="out" id="out"></div>
+    </div>
+  </div>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
