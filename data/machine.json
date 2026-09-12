@@ -1,0 +1,10 @@
+{
+  "_comment": "Physical laser bed calibration. Jobs are refused if the placed artwork exceeds (bed - margin). Start conservative and widen only after a frame test confirms the head clears the walls. Origin is the machine home corner (top-left for Epilog Helix); X = long axis (24 in), Y = short axis (12 in).",
+  "name": "Epilog Helix 24 (30W)",
+  "bed_w_mm": 609.6,
+  "bed_h_mm": 304.8,
+  "usable_w_mm": 600.0,
+  "usable_h_mm": 295.0,
+  "margin_mm": 3.0,
+  "origin": "top-left"
+}

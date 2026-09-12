@@ -40,6 +40,11 @@ def load_materials():
         return json.load(f)
 
 
+def load_machine():
+    with open(os.path.join(HERE, "data", "machine.json")) as f:
+        return json.load(f)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         sys.stderr.write("[srv] " + (a[0] % a[1:]) + "\n")
@@ -78,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/materials":
             return self._send_json(load_materials())
         if path == "/api/config":
-            return self._send_json({"laser_host": LASER_HOST, "bed_mm": [epilog.BED_W_MM, epilog.BED_H_MM]})
+            return self._send_json({"laser_host": LASER_HOST, "machine": load_machine()})
         if path.startswith("/preview/"):
             sid = path[len("/preview/"):].rsplit(".", 1)[0]
             s = SESSIONS.get(sid)
@@ -116,6 +121,13 @@ class Handler(BaseHTTPRequestHandler):
         buf = BytesIO()
         rgb.save(buf, "PNG")
         layers = pdfjob.detect_layers(rgb)
+        bbox = pdfjob.content_bbox_mm(rgb, PREVIEW_DPI)
+        content = None
+        if bbox:
+            content = {
+                "x0_mm": round(bbox[0], 2), "y0_mm": round(bbox[1], 2),
+                "w_mm": round(bbox[2] - bbox[0], 2), "h_mm": round(bbox[3] - bbox[1], 2),
+            }
         SESSIONS[sid] = {"pdf_path": pdf_path, "preview_png": buf.getvalue(), "info": info}
         return self._send_json({
             "id": sid,
@@ -123,6 +135,7 @@ class Handler(BaseHTTPRequestHandler):
             "preview": "/preview/%s.png" % sid,
             "preview_px": rgb.size,
             "layers": layers,
+            "content_mm": content,
         })
 
     def handle_send(self):
@@ -133,13 +146,56 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"error": "unknown session"}, 404)
         host = req.get("host", LASER_HOST)
         offset = req.get("offset_mm", [0, 0])
+        ox, oy = float(offset[0]), float(offset[1])
         autofocus = bool(req.get("autofocus", False))
         dry_run = bool(req.get("dry_run", False))
+        mc = load_machine()
+
+        # --- global content bbox (mm) so all layers crop/translate consistently ---
+        bbox_rgb = pdfjob.render_rgb(s["pdf_path"], dpi=PREVIEW_DPI, page=1)
+        bbox = pdfjob.content_bbox_mm(bbox_rgb, PREVIEW_DPI)
+        if not bbox:
+            return self._send_json({"error": "the PDF appears blank"}, 400)
+        bx0, by0, bx1, by1 = bbox
+        cw, ch = bx1 - bx0, by1 - by0
+
+        # --- HARD bed-boundary guard (refuse jobs that would exceed the table) ---
+        max_w = mc["usable_w_mm"] - mc["margin_mm"]
+        max_h = mc["usable_h_mm"] - mc["margin_mm"]
+        placement = {
+            "content_w_mm": round(cw, 2), "content_h_mm": round(ch, 2),
+            "x_mm": round(ox, 2), "y_mm": round(oy, 2),
+            "extent_x_mm": round(ox + cw, 2), "extent_y_mm": round(oy + ch, 2),
+            "limit_x_mm": round(max_w, 2), "limit_y_mm": round(max_h, 2),
+        }
+        if ox < 0 or oy < 0 or ox + cw > max_w or oy + ch > max_h:
+            return self._send_json({
+                "error": "OUT OF BOUNDS — job would exceed the bed and hit a wall. "
+                         "Reduce the artwork or offset. Content %.0f×%.0f mm at (%.0f,%.0f) "
+                         "reaches (%.0f,%.0f); usable limit is (%.0f,%.0f)."
+                         % (cw, ch, ox, oy, ox + cw, oy + ch, max_w, max_h),
+                "placement": placement, "blocked": True,
+            }, 400)
+
+        # --- frame test: trace the content bbox at low power to verify placement ---
+        if req.get("frame"):
+            fp = int(req.get("frame_power", 6))
+            fs = int(req.get("frame_speed", 40))
+            rect = epilog.rect_polyline(ox, oy, cw, ch)
+            part = epilog.VectorPart([rect], power=fp, speed=fs, frequency=500)
+            job = epilog.build_job([part], dpi=500, title="frame-test", overcut_mm=0)
+            if not dry_run:
+                epilog.send_lpd(host, job, jobname="900", title="frame-test",
+                                require_ack=not req.get("no_ack", False))
+            return self._send_json({
+                "jobs": [{"title": "frame-test", "bytes": len(job), "sent": not dry_run}],
+                "dry_run": dry_run, "host": host, "placement": placement, "frame": True,
+            })
+
         assignments = [a for a in req.get("assignments", []) if a.get("op") in ("engrave", "cut")]
         if not assignments:
             return self._send_json({"error": "no engrave/cut assignments"}, 400)
 
-        # cache vector extraction only if needed
         vecs = None
         jobs_summary = []
         jobno = 0
@@ -150,27 +206,25 @@ class Handler(BaseHTTPRequestHandler):
                 dpi = int(a["dpi"])
                 rgb = pdfjob.render_rgb(s["pdf_path"], dpi=dpi, page=1)
                 mask = pdfjob.raster_from_colors(rgb, colors=[a["rgb"]] if a.get("rgb") else None)
+                # crop to global content bbox (px at this dpi) so it lands at the offset
+                cx0 = int(round(bx0 / 25.4 * dpi)); cy0 = int(round(by0 / 25.4 * dpi))
+                cx1 = int(round(bx1 / 25.4 * dpi)); cy1 = int(round(by1 / 25.4 * dpi))
+                mask = mask.crop((cx0, cy0, cx1, cy1))
                 part = epilog.RasterPart(mask, power=a["power"], speed=a["speed"],
-                                         dpi=dpi, x_mm=offset[0], y_mm=offset[1])
+                                         dpi=dpi, x_mm=ox, y_mm=oy)
                 job = epilog.build_job([part], dpi=dpi, title=title, autofocus=autofocus)
             else:  # cut
                 if vecs is None:
                     vecs = pdfjob.extract_vectors(s["pdf_path"], page=1)
-                hexc = a.get("hex")
-                polylines = vecs.get(hexc, [])
+                polylines = vecs.get(a.get("hex"), [])
                 if not polylines:
-                    # fall back: any near-color match
-                    for k, v in vecs.items():
-                        if k == hexc:
-                            polylines = v
-                if not polylines:
-                    jobs_summary.append({"title": title, "skipped": "no vector paths for %s" % hexc})
+                    jobs_summary.append({"title": title, "skipped": "no vector paths for %s" % a.get("hex")})
                     continue
-                polylines = [[(x + offset[0], y + offset[1]) for (x, y) in pl] for pl in polylines]
-                dpi = 500
+                # translate content bbox origin -> offset
+                polylines = [[(x - bx0 + ox, y - by0 + oy) for (x, y) in pl] for pl in polylines]
                 part = epilog.VectorPart(polylines, power=a["power"], speed=a["speed"],
                                          frequency=a.get("freq", 500))
-                job = epilog.build_job([part], dpi=dpi, title=title, autofocus=autofocus)
+                job = epilog.build_job([part], dpi=500, title=title, autofocus=autofocus)
 
             if dry_run:
                 jobs_summary.append({"title": title, "bytes": len(job), "sent": False})
@@ -179,7 +233,8 @@ class Handler(BaseHTTPRequestHandler):
                                 require_ack=not req.get("no_ack", False))
                 jobs_summary.append({"title": title, "bytes": len(job), "sent": True})
 
-        return self._send_json({"jobs": jobs_summary, "dry_run": dry_run, "host": host})
+        return self._send_json({"jobs": jobs_summary, "dry_run": dry_run,
+                                "host": host, "placement": placement})
 
 
 def main():

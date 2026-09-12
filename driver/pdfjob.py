@@ -17,9 +17,24 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 PT_PER_MM = 72.0 / 25.4  # PDF user-space points per mm
+
+
+def ink_bbox_px(rgb):
+    """Bounding box (x0,y0,x1,y1) of non-white content, or None if blank."""
+    gray = rgb.convert("L")
+    diff = ImageChops.difference(gray, Image.new("L", gray.size, 255))
+    return diff.getbbox()
+
+
+def content_bbox_mm(rgb, dpi):
+    """Ink bounding box in mm (x0,y0,x1,y1) at the given render dpi."""
+    bb = ink_bbox_px(rgb)
+    if not bb:
+        return None
+    return tuple(v / dpi * 25.4 for v in bb)
 
 
 def _run(cmd):

@@ -103,8 +103,12 @@
     </div>
 
     <div class="section" id="placeSection" style="display:none">
-      <h2>Placement</h2>
-      <div class="row">
+      <h2>Placement on bed</h2>
+      <svg id="bed" viewBox="0 0 610 305" preserveAspectRatio="xMidYMid meet"
+           style="width:100%;background:#0c0d11;border:1px solid var(--line);border-radius:8px"></svg>
+      <p class="muted" id="placeInfo" style="font-size:12px;margin:8px 0 0"></p>
+      <p class="warn" id="boundsWarn" style="font-size:12px;margin:6px 0 0;display:none"></p>
+      <div class="row" style="margin-top:10px">
         <div><label class="f">X offset (mm)</label><input type="number" id="offx" value="0" step="1"></div>
         <div><label class="f">Y offset (mm)</label><input type="number" id="offy" value="0" step="1"></div>
       </div>
@@ -119,9 +123,13 @@
     <div class="section" id="sendSection" style="display:none">
       <label class="toggle" style="margin-bottom:10px">
         <input type="checkbox" id="dryrun" checked> dry-run (build jobs, don't send)</label>
-      <button class="send" id="sendBtn">Build jobs</button>
+      <div class="row">
+        <button class="ghost" id="frameBtn" style="flex:0 0 auto">◻ Frame test</button>
+        <button class="send" id="sendBtn" style="margin-top:0">Build jobs</button>
+      </div>
       <p class="warn" id="sendWarn" style="margin:10px 0 0">
-        Sent jobs only queue — the laser fires when you press GO on the machine.
+        Frame test traces the artwork outline at low power — run it first to confirm the
+        head stays on the material. Sent jobs only queue; the laser fires on GO.
       </p>
       <div class="out" id="out"></div>
     </div>

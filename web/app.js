@@ -1,12 +1,15 @@
 // Helix Studio — front-end
 const $ = s => document.querySelector(s);
-const state = { materials: [], session: null, laserHost: "192.168.1.6" };
+const state = { materials: [], session: null, laserHost: "192.168.1.6", machine: null };
 
 async function boot() {
   const cfg = await (await fetch("/api/config")).json();
   state.laserHost = cfg.laser_host;
+  state.machine = cfg.machine;
   $("#laserPill").innerHTML = "laser <b>" + cfg.laser_host + "</b>";
   $("#host").value = cfg.laser_host;
+  const m = cfg.machine;
+  $("#bed").setAttribute("viewBox", `0 0 ${m.bed_w_mm} ${m.bed_h_mm}`);
 
   const mat = await (await fetch("/api/materials")).json();
   state.materials = mat.materials;
@@ -55,9 +58,54 @@ async function importPdf(file) {
   $("#layersSection").style.display = data.layers.length ? "" : "none";
   $("#placeSection").style.display = "";
   $("#sendSection").style.display = "";
+  updateBed();
 }
 
 $("#resetBtn").onclick = () => location.reload();
+
+// ---- bed placement preview + bounds check ----
+function boundsCheck() {
+  const m = state.machine, c = state.session && state.session.content_mm;
+  if (!m || !c) return { ok: false };
+  const ox = +$("#offx").value, oy = +$("#offy").value;
+  const maxW = m.usable_w_mm - m.margin_mm, maxH = m.usable_h_mm - m.margin_mm;
+  const ok = ox >= 0 && oy >= 0 && ox + c.w_mm <= maxW && oy + c.h_mm <= maxH;
+  return { ok, ox, oy, cw: c.w_mm, ch: c.h_mm, maxW, maxH };
+}
+
+function updateBed() {
+  const svg = $("#bed"), m = state.machine, c = state.session && state.session.content_mm;
+  if (!m) return;
+  const b = boundsCheck();
+  const art = c ? `<rect x="${b.ox}" y="${b.oy}" width="${c.w_mm}" height="${c.h_mm}"
+      fill="${b.ok ? 'rgba(123,216,143,.28)' : 'rgba(255,107,107,.30)'}"
+      stroke="${b.ok ? '#7bd88f' : '#ff6b6b'}" stroke-width="2"/>` : "";
+  svg.innerHTML = `
+    <rect x="0" y="0" width="${m.bed_w_mm}" height="${m.bed_h_mm}" fill="#111318" stroke="#333644" stroke-width="1"/>
+    <rect x="${m.margin_mm}" y="${m.margin_mm}"
+      width="${m.usable_w_mm - 2*m.margin_mm}" height="${m.usable_h_mm - 2*m.margin_mm}"
+      fill="none" stroke="#3a3f50" stroke-dasharray="6 5" stroke-width="1"/>
+    <circle cx="0" cy="0" r="6" fill="#6aa8ff"/>
+    ${art}`;
+  if (c) {
+    $("#placeInfo").textContent =
+      `Artwork ${c.w_mm.toFixed(0)}×${c.h_mm.toFixed(0)} mm · placed at (${b.ox},${b.oy}) · ` +
+      `reaches (${(b.ox + c.w_mm).toFixed(0)},${(b.oy + c.h_mm).toFixed(0)}) mm · ` +
+      `bed ${m.bed_w_mm}×${m.bed_h_mm}`;
+    const warn = $("#boundsWarn");
+    if (!b.ok) {
+      warn.style.display = "";
+      warn.textContent = "⚠ Out of bounds — would exceed the usable area (" +
+        b.maxW.toFixed(0) + "×" + b.maxH.toFixed(0) + " mm). Sending is disabled.";
+    } else warn.style.display = "none";
+  }
+  const bad = !b.ok;
+  $("#sendBtn").disabled = bad;
+  $("#frameBtn").disabled = bad;
+}
+
+$("#offx").oninput = updateBed;
+$("#offy").oninput = updateBed;
 
 // ---- material change re-populates layer operation dropdowns ----
 $("#material").onchange = () => {
@@ -196,6 +244,30 @@ $("#sendBtn").onclick = async () => {
 
 $("#dryrun").onchange = e => {
   $("#sendBtn").textContent = e.target.checked ? "Build jobs" : "Send to laser";
+};
+
+// ---- frame test ----
+$("#frameBtn").onclick = async () => {
+  if (!state.session) return;
+  const dry = $("#dryrun").checked;
+  const out = $("#out"); out.classList.add("on"); out.textContent = "framing…";
+  const btn = $("#frameBtn"); btn.disabled = true;
+  try {
+    const res = await fetch("/api/send", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: state.session.id, host: $("#host").value, frame: true,
+        offset_mm: [+$("#offx").value, +$("#offy").value], dry_run: dry,
+      }),
+    });
+    const data = await res.json();
+    if (data.error) out.textContent = "ERROR: " + data.error;
+    else out.textContent = (dry ? "DRY-RUN frame (not sent)\n" :
+      "Frame sent — press GO; the head traces the artwork outline at low power.\n") +
+      `outline ${data.placement.content_w_mm}×${data.placement.content_h_mm} mm at ` +
+      `(${data.placement.x_mm},${data.placement.y_mm})`;
+  } catch (e) { out.textContent = "ERROR: " + e.message; }
+  btn.disabled = false;
 };
 
 boot();

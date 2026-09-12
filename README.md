@@ -22,7 +22,7 @@ Requirements (already present on this Mac): **Poppler** (`pdftocairo`,
 
 ## How it works
 
-```
+```text
 PDF ──pdftocairo──► preview + colour raster ──► detect layers (colours)
                          │                            │
                          │ engrave                    │ cut
@@ -43,6 +43,24 @@ PDF ──pdftocairo──► preview + colour raster ──► detect layers (c
   dropdown; these are *starting points* — always test on scrap.
 - `server.py` — local web server + REST API.
 - `web/` — the UI.
+
+## Placement & bed safety (calibration)
+
+Artwork is **cropped to its ink bounding box** and placed at your **X/Y offset**
+from the machine home corner (top-left) — so a small design on a big page
+engraves near the origin, not at its page position (this was the original
+"head drives into the Y wall" bug).
+
+- **`data/machine.json`** is the bed calibration: `bed_w_mm` / `bed_h_mm`, a
+  conservative `usable_w_mm` / `usable_h_mm`, and a `margin_mm`. The server
+  **refuses any job** whose placed artwork would exceed `usable − margin`, so a
+  job can't drive the head into a wall. Start conservative; widen only after a
+  frame test confirms the head clears the rails.
+- The UI shows a **bed-placement preview** (artwork rectangle inside the bed,
+  green = fits, red = out of bounds) and disables sending when out of bounds.
+- **Frame test** button: traces the artwork's bounding box at low power so you
+  can watch the head walk the perimeter and confirm it stays on the material
+  *before* committing to the real burn.
 
 ## Settings notation
 
