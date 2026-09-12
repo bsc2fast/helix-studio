@@ -181,6 +181,7 @@ def _raster_pcl(part, threshold=128):
     o += ESC + b"*r%dT" % max_y + ESC + b"*r%dS" % max_x
     o += ESC + b"*b2M" + ESC + b"&y0O" + ESC + b"*r1A"
 
+    left_to_right = True
     for y in range(h):
         row = _pack_row_bits([px[x, y] < threshold for x in range(w)], True)
         # strip leading / trailing zero bytes
@@ -197,13 +198,19 @@ def _raster_pcl(part, threshold=128):
             continue
         o += ESC + b"*p%dX" % (ox + jump * 8)
         o += ESC + b"*p%dY" % (oy + y)
-        o += ESC + b"*b%dA" % len(seg)
-        enc = _packbits(seg)
+        if left_to_right:
+            o += ESC + b"*b%dA" % len(seg)
+            data = seg
+        else:                       # right-to-left: negative count, reversed bytes
+            o += ESC + b"*b%dA" % (-len(seg))
+            data = seg[::-1]
+        enc = _packbits(data)
         ln = len(enc)
         pcks = ln // 8 + (1 if ln % 8 else 0)
         o += ESC + b"*b%dW" % (pcks * 8)
         o += enc
         o += b"\x80" * (pcks * 8 - ln)   # pad to declared byte count
+        left_to_right = not left_to_right   # bidirectional, toggle per emitted row
     o += ESC + b"*rC"
     return bytes(o), max_x, max_y
 
