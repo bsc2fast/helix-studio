@@ -66,22 +66,20 @@
   .hint{color:var(--muted);font-size:12px}
 
   /* ---- floating controls (bottom-right) ---- */
-  .floating{position:absolute;right:18px;bottom:18px;width:340px;
+  .floating{position:absolute;right:18px;bottom:18px;width:216px;
     max-height:calc(100% - 36px);overflow:auto;background:var(--panel);
     border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px;z-index:2}
   .floating h2{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px}
   .floating section{margin-bottom:16px}
   .floating section:last-child{margin-bottom:0}
-  .placeRow{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}
-  .fld{display:flex;flex-direction:column;gap:3px}
+  .fld{display:flex;flex-direction:column;gap:3px;margin-bottom:8px}
   .fld label{font-size:11px;color:var(--muted)}
-  .fld input{width:84px}
+  .fld input{width:100%}
   button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid var(--line);
     background:var(--panel2);color:var(--ink);padding:8px 12px}
   button:hover{border-color:var(--accent2)}
-  .btnrow{display:flex;gap:8px;margin-top:8px}
-  .btnrow button{flex:1}
-  .placeInfo{font-size:12px;color:var(--muted);margin:10px 0 0}
+  #placeSection button{display:block;width:100%;margin-top:8px}
+  .placeInfo{font-size:11.5px;color:var(--muted);margin:10px 0 0;line-height:1.45}
   .warn{color:var(--danger);font-size:12px;margin:6px 0 0}
 
   .layer{border:1px solid var(--line);border-radius:9px;padding:10px;margin-bottom:8px;background:var(--panel2)}
@@ -126,15 +124,11 @@
 
   <div class="floating" id="controls" hidden>
     <section id="placeSection">
-      <h2>Placement — drag on bed or set here</h2>
-      <div class="placeRow">
-        <div class="fld"><label>X (mm)</label><input type="number" id="offx" value="0" step="1"></div>
-        <div class="fld"><label>Y (mm)</label><input type="number" id="offy" value="0" step="1"></div>
-      </div>
-      <div class="btnrow">
-        <button id="rotateBtn" title="Rotate 90°">⟳ Rotate <span id="rotLbl">0°</span></button>
-        <button id="centerBtn">Center</button>
-      </div>
+      <h2>Placement</h2>
+      <div class="fld"><label>X (mm)</label><input type="number" id="offx" value="0" step="1"></div>
+      <div class="fld"><label>Y (mm)</label><input type="number" id="offy" value="0" step="1"></div>
+      <button id="rotateBtn" title="Rotate 90°">⟳ Rotate <span id="rotLbl">0°</span></button>
+      <button id="centerBtn">Center</button>
       <p class="placeInfo" id="placeInfo"></p>
       <p class="warn" id="boundsWarn" hidden></p>
     </section>

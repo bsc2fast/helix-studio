@@ -1,9 +1,11 @@
 // Helix Studio — front-end
 const $ = s => document.querySelector(s);
 const SVGNS = "http://www.w3.org/2000/svg";
+const GUT = 40;   // mm gutter (top+left) for rulers
+const PAD = 10;   // mm padding (right+bottom)
 const state = {
   materials: [], session: null, machine: null, laserHost: "192.168.1.6",
-  off: { x: 0, y: 0 }, rot: 0,
+  off: { x: 0, y: 0 }, rot: 0, vb: { w: 1, h: 1 }, page: { w: 0, h: 0 },
 };
 
 // ---------- theme ----------
@@ -26,7 +28,8 @@ async function boot() {
   (cfg.machines || [cfg.machine]).forEach(mm => msel.appendChild(new Option(mm.name, mm.name)));
   msel.value = cfg.machine.name;
   const m = cfg.machine;
-  $("#bed").setAttribute("viewBox", `0 0 ${m.bed_w_mm} ${m.bed_h_mm}`);
+  state.vb = { w: m.bed_w_mm + GUT + PAD, h: m.bed_h_mm + GUT + PAD };
+  $("#bed").setAttribute("viewBox", `${-GUT} ${-GUT} ${state.vb.w} ${state.vb.h}`);
   buildBed();
   fitBed();
 
@@ -39,11 +42,11 @@ async function boot() {
 // size the bed SVG to fill its container while preserving the bed aspect
 // (exact 1:1 viewBox mapping keeps drag math simple)
 function fitBed() {
-  const m = state.machine; if (!m) return;
+  if (!state.machine) return;
   const wrap = document.querySelector(".bedwrap");
-  const pad = 48;
+  const pad = 40;
   const availW = wrap.clientWidth - pad, availH = wrap.clientHeight - pad;
-  const A = m.bed_w_mm / m.bed_h_mm;
+  const A = state.vb.w / state.vb.h;
   let w = availW, h = w / A;
   if (h > availH) { h = availH; w = h * A; }
   const bed = $("#bed");
@@ -72,14 +75,29 @@ async function importPdf(file) {
   if (data.error) { drop.innerHTML = "<p class='warn'>" + data.error + "</p>"; return; }
   state.session = data;
   state.rot = 0;
+  state.page = { w: data.info.width_mm, h: data.info.height_mm };
   $("#drop").hidden = true;
   $("#controls").hidden = false;
   $("#resetBtn").hidden = false;
   $("#layersSection").hidden = !data.layers.length;
-  // SVG elements have no .hidden IDL property — must toggle the attribute
-  if (bedEls) { bedEls.art.removeAttribute("hidden"); bedEls.lbl.removeAttribute("hidden"); }
+  // SVG elements have no .hidden IDL property — toggle the attribute instead
+  if (bedEls) {
+    bedEls.artimg.setAttributeNS("http://www.w3.org/1999/xlink", "href", data.preview + "?t=" + Date.now());
+    bedEls.artimg.setAttribute("href", data.preview + "?t=" + Date.now());
+    bedEls.artimg.setAttribute("width", state.page.w);
+    bedEls.artimg.setAttribute("height", state.page.h);
+    bedEls.artimg.removeAttribute("hidden");
+    bedEls.art.removeAttribute("hidden");
+  }
   centerArt();
   renderLayers();
+}
+
+function artTransform(R, ox, oy, x0, y0, cw, ch) {
+  if (R === 90)  return `translate(${ox} ${oy}) translate(${ch} 0) rotate(90) translate(${-x0} ${-y0})`;
+  if (R === 180) return `translate(${ox} ${oy}) translate(${cw} ${ch}) rotate(180) translate(${-x0} ${-y0})`;
+  if (R === 270) return `translate(${ox} ${oy}) translate(0 ${cw}) rotate(270) translate(${-x0} ${-y0})`;
+  return `translate(${ox - x0} ${oy - y0})`;
 }
 $("#resetBtn").onclick = () => location.reload();
 
@@ -107,23 +125,50 @@ function centerArt() {
 
 // ---------- bed (built once, updated in place) ----------
 let bedEls = null;
+const mk = (tag, attrs) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+
 function buildBed() {
   const bed = $("#bed"), m = state.machine;
   bed.innerHTML = "";
-  const mk = (tag, attrs) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+
+  // clip for the artwork image
+  const defs = mk("defs", {});
+  const cp = mk("clipPath", { id: "artclip", clipPathUnits: "userSpaceOnUse" });
+  const clipR = mk("rect", { x: 0, y: 0, width: 1, height: 1 });
+  cp.appendChild(clipR); defs.appendChild(cp); bed.appendChild(defs);
+
   bed.appendChild(mk("rect", { x: 0, y: 0, width: m.bed_w_mm, height: m.bed_h_mm, fill: "var(--bed)", stroke: "var(--line)", "stroke-width": 1 }));
   bed.appendChild(mk("rect", {
     x: m.margin_mm, y: m.margin_mm,
     width: m.usable_w_mm - 2 * m.margin_mm, height: m.usable_h_mm - 2 * m.margin_mm,
     fill: "none", stroke: "var(--bedline)", "stroke-dasharray": "7 5", "stroke-width": 1,
   }));
-  bed.appendChild(mk("circle", { cx: 0, cy: 0, r: 7, fill: "var(--accent2)" }));
-  const art = mk("rect", { class: "art", rx: 2, "stroke-width": 2, hidden: "hidden" });
+  drawRulers(bed, m);
+  bed.appendChild(mk("circle", { cx: 0, cy: 0, r: 6, fill: "var(--accent2)" }));
+
+  // artwork image (clipped to the content rect), then the coloured border on top
+  const g = mk("g", { "clip-path": "url(#artclip)" });
+  const artimg = mk("image", { id: "artimg", preserveAspectRatio: "none", hidden: "hidden" });
+  g.appendChild(artimg); bed.appendChild(g);
+  const art = mk("rect", { class: "art", rx: 1.5, fill: "none", "stroke-width": 2.5, hidden: "hidden" });
   bed.appendChild(art);
-  const lbl = mk("text", { "font-size": 22, "text-anchor": "middle", fill: "var(--ink)", hidden: "hidden" });
-  bed.appendChild(lbl);
-  bedEls = { art, lbl };
+
+  bedEls = { art, artimg, clipR };
   attachDrag(art);
+}
+
+function drawRulers(bed, m) {
+  const majorX = 100, majorY = 100, minor = 50, fs = 11;
+  for (let x = 0; x <= m.bed_w_mm + 1; x += minor) {
+    const major = x % majorX === 0;
+    bed.appendChild(mk("line", { x1: x, y1: major ? -12 : -7, x2: x, y2: 0, stroke: "var(--bedline)", "stroke-width": 1 }));
+    if (major) bed.appendChild(Object.assign(mk("text", { x: x, y: -16, "font-size": fs, "text-anchor": "middle", fill: "var(--muted)" }), { textContent: x }));
+  }
+  for (let y = 0; y <= m.bed_h_mm + 1; y += minor) {
+    const major = y % majorY === 0;
+    bed.appendChild(mk("line", { x1: major ? -12 : -7, y1: y, x2: 0, y2: y, stroke: "var(--bedline)", "stroke-width": 1 }));
+    if (major) bed.appendChild(Object.assign(mk("text", { x: -16, y: y + fs / 3, "font-size": fs, "text-anchor": "end", fill: "var(--muted)" }), { textContent: y }));
+  }
 }
 
 function attachDrag(art) {
@@ -131,7 +176,7 @@ function attachDrag(art) {
   art.addEventListener("pointerdown", e => {
     const bed = $("#bed");
     const r = bed.getBoundingClientRect();
-    const scale = state.machine.bed_w_mm / r.width;  // mm per px (uniform)
+    const scale = state.vb.w / r.width;  // mm per px (uniform; viewBox incl. gutters)
     start = { px: e.clientX, py: e.clientY, ox: state.off.x, oy: state.off.y, scale };
     art.classList.add("drag");
     art.setPointerCapture(e.pointerId);
@@ -155,17 +200,21 @@ function updatePlacement() {
   const d = artDims(), L = limits();
   const ok = parsed && state.off.x >= 0 && state.off.y >= 0 &&
              state.off.x + d.w <= L.x + 0.01 && state.off.y + d.h <= L.y + 0.01;
-  const fill = ok ? "rgba(123,216,143,.30)" : "rgba(255,107,107,.32)";
   const stroke = ok ? "var(--accent)" : "var(--danger)";
-  bedEls.art.setAttribute("x", state.off.x);
-  bedEls.art.setAttribute("y", state.off.y);
+  const ox = state.off.x, oy = state.off.y;
+  // border
+  bedEls.art.setAttribute("x", ox);
+  bedEls.art.setAttribute("y", oy);
   bedEls.art.setAttribute("width", Math.max(d.w, 0.1));
   bedEls.art.setAttribute("height", Math.max(d.h, 0.1));
-  bedEls.art.setAttribute("fill", fill);
   bedEls.art.setAttribute("stroke", stroke);
-  bedEls.lbl.setAttribute("x", state.off.x + d.w / 2);
-  bedEls.lbl.setAttribute("y", state.off.y + d.h / 2 + 7);
-  bedEls.lbl.textContent = `${d.w.toFixed(0)}×${d.h.toFixed(0)}`;
+  // clip window + artwork image transform (crop page to content, rotate, place)
+  bedEls.clipR.setAttribute("x", ox);
+  bedEls.clipR.setAttribute("y", oy);
+  bedEls.clipR.setAttribute("width", Math.max(d.w, 0.1));
+  bedEls.clipR.setAttribute("height", Math.max(d.h, 0.1));
+  const c = state.session.content_mm;
+  if (c) bedEls.artimg.setAttribute("transform", artTransform(state.rot, ox, oy, c.x0_mm, c.y0_mm, c.w_mm, c.h_mm));
   $("#offx").value = Math.round(state.off.x);
   $("#offy").value = Math.round(state.off.y);
   $("#rotLbl").textContent = state.rot + "°";
