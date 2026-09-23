@@ -1,0 +1,48 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  @page { size: 210mm 297mm; margin: 0 }
+  html, body { margin: 0 }
+  .pg { width: 210mm; height: 297mm; page-break-after: always; position: relative; overflow: hidden }
+  .pg:last-child { page-break-after: auto }
+  svg { position: absolute; left: 30mm; top: 40mm }
+</style></head>
+<body>
+<!-- 1: sun wheel (engrave) -->
+<div class="pg"><svg width="120mm" height="120mm" viewBox="0 0 120 120">
+  <g fill="none" stroke="#000">
+    <circle cx="60" cy="60" r="58" stroke-width="0.8"/>
+    <circle cx="60" cy="60" r="52" stroke-width="0.4"/>
+    <circle cx="60" cy="60" r="15" stroke-width="0.8"/>
+    <g stroke-width="0.8" stroke-linecap="round">
+      <line x1="60" y1="20" x2="60" y2="42"/><line x1="60" y1="78" x2="60" y2="100"/>
+      <line x1="20" y1="60" x2="42" y2="60"/><line x1="78" y1="60" x2="100" y2="60"/>
+      <line x1="31.7" y1="31.7" x2="47.3" y2="47.3"/><line x1="72.7" y1="72.7" x2="88.3" y2="88.3"/>
+      <line x1="88.3" y1="31.7" x2="72.7" y2="47.3"/><line x1="47.3" y1="72.7" x2="31.7" y2="88.3"/>
+    </g>
+  </g>
+  <circle cx="60" cy="60" r="6" fill="#000"/>
+</svg></div>
+<!-- 2: round coaster, scalloped edge (cut) -->
+<div class="pg"><svg width="106mm" height="106mm" viewBox="-5 -5 106 106">
+  <g fill="none" stroke="#e00" stroke-width="0.3">
+    <path d="M48 2 A6 6 0 0 1 59.6 3.5 A6 6 0 0 1 70.4 8 A6 6 0 0 1 79.5 15.3 A6 6 0 0 1 86.4 24.6 A6 6 0 0 1 90.6 35.4 A6 6 0 0 1 92 48 A6 6 0 0 1 90.6 60.6 A6 6 0 0 1 86.4 71.4 A6 6 0 0 1 79.5 80.7 A6 6 0 0 1 70.4 88 A6 6 0 0 1 59.6 92.5 A6 6 0 0 1 48 94 A6 6 0 0 1 36.4 92.5 A6 6 0 0 1 25.6 88 A6 6 0 0 1 16.5 80.7 A6 6 0 0 1 9.6 71.4 A6 6 0 0 1 5.4 60.6 A6 6 0 0 1 4 48 A6 6 0 0 1 5.4 35.4 A6 6 0 0 1 9.6 24.6 A6 6 0 0 1 16.5 15.3 A6 6 0 0 1 25.6 8 A6 6 0 0 1 36.4 3.5 A6 6 0 0 1 48 2 Z"/>
+    <circle cx="48" cy="48" r="34"/>
+  </g>
+</svg></div>
+<!-- 3: gift tag with hole (cut) -->
+<div class="pg"><svg width="100mm" height="52mm" viewBox="0 0 100 52">
+  <g fill="none" stroke="#e00" stroke-width="0.3">
+    <path d="M18 1 H95 A4 4 0 0 1 99 5 V47 A4 4 0 0 1 95 51 H18 L1 34 V18 Z"/>
+    <circle cx="14" cy="26" r="4"/>
+    <rect x="30" y="10" width="60" height="32" rx="3"/>
+  </g>
+</svg></div>
+<!-- 4: hexagon coaster (cut) -->
+<div class="pg"><svg width="92mm" height="80mm" viewBox="0 0 92 80">
+  <g fill="none" stroke="#e00" stroke-width="0.3">
+    <polygon points="23,1 69,1 91,40 69,79 23,79 1,40"/>
+    <polygon points="30,13 62,13 78,40 62,67 30,67 14,40"/>
+  </g>
+</svg></div>
+</body></html>

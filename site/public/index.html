@@ -4,12 +4,12 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Helix Studio — send a PDF to your Epilog laser, from any browser</title>
-<meta name="description" content="A small local web app that turns a PDF into Epilog Helix laser jobs and sends them over the network. No VisiCut, no Windows-only driver, no CUPS queue. Open source, MIT." />
+<meta name="description" content="A small local web app that turns a PDF into Epilog Helix laser jobs and sends them over the network. Lay out every page of a PDF on your stock sheet, with overlap and bed-boundary checks. No VisiCut, no Windows-only driver, no CUPS queue. Open source, MIT." />
 <link rel="canonical" href="https://helix.sankhacooray.com/" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://helix.sankhacooray.com/" />
 <meta property="og:title" content="Helix Studio — send a PDF to your Epilog laser, from any browser" />
-<meta property="og:description" content="Drop a PDF, place it on the bed, pick a material preset, send. A local web app for the Epilog Helix and Mini — no driver, no queue, no cloud." />
+<meta property="og:description" content="Drop a PDF, lay its pages out on your stock sheet, pick a material preset, send — as one job. A local web app for the Epilog Helix and Mini — no driver, no queue, no cloud." />
 <meta property="og:image" content="https://helix.sankhacooray.com/assets/app-dark.png" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#14151a" />
@@ -74,6 +74,7 @@
     overflow:hidden;box-shadow:var(--shadow);background:var(--panel)}
   .shot img{display:block;width:100%;height:auto}
   .shot .cap{padding:11px 16px;font-size:13px;color:var(--muted);border-top:1px solid var(--line)}
+  .shot.inline{margin-top:34px}
   img.light-only{display:none}
   @media (prefers-color-scheme: light){
     img.dark-only{display:none}
@@ -153,6 +154,7 @@
     </span>
     <nav>
       <a href="#problem" class="hide-sm">Why</a>
+      <a href="#layout" class="hide-sm">Features</a>
       <a href="#how" class="hide-sm">How it works</a>
       <a href="#start">Get started</a>
       <a href="https://github.com/bsc2fast/helix-studio">GitHub</a>
@@ -168,9 +170,9 @@
     <h1>Send a PDF to your Epilog laser<br><span class="grad">from any browser.</span></h1>
     <p class="lede">
       Helix Studio is a small web app that runs on your own machine. Drop in a PDF,
-      place it on a true-to-scale picture of the bed, pick a material preset, and the
-      job goes straight to an Epilog Helix or Mini over the network — no VisiCut, no
-      Windows-only print driver, no CUPS queue.
+      lay its pages out on a true-to-scale picture of the bed and your stock sheet,
+      pick a material preset, and the job goes straight to an Epilog Helix or Mini
+      over the network — no VisiCut, no Windows-only print driver, no CUPS queue.
     </p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/bsc2fast/helix-studio">View the code on GitHub</a>
@@ -178,20 +180,21 @@
     </div>
 
     <ol class="flow">
-      <li><b>1 · Import</b>Drop in a PDF. It's cropped to its ink.</li>
-      <li><b>2 · Place</b>Drag it on the bed, or type X/Y in mm.</li>
+      <li><b>1 · Import</b>Drop in a PDF. Every page is listed, cropped to its ink.</li>
+      <li><b>2 · Lay out</b>Place pages on your stock sheet. Overlaps are caught.</li>
       <li><b>3 · Choose</b>Material, thickness, engrave or cut preset.</li>
-      <li><b>4 · Send</b>The job queues. You press GO on the machine.</li>
+      <li><b>4 · Send</b>Every page goes as one job. You press GO on the machine.</li>
     </ol>
 
     <figure class="shot">
       <img class="dark-only" src="./assets/app-dark.png" width="2880" height="1800"
-           alt="Helix Studio: a circular design placed on a scale drawing of the laser bed, with rulers in millimetres, a dashed safety boundary, and a placement panel showing X, Y and rotation." />
+           alt="Helix Studio: four pages of a PDF — a sun motif, a scalloped coaster, a gift tag and a hexagon coaster — laid out on an Arch B sheet drawn on a scale picture of the laser bed, with page thumbnails on the left, the laser's IP with a green connected dot in the top bar, and Material and Artwork cards on the right." />
       <img class="light-only" src="./assets/app-light.png" width="2880" height="1800"
-           alt="Helix Studio in its light theme, showing the same design placed on the laser bed." />
+           alt="Helix Studio in its light theme, showing the same four pages laid out on an Arch B sheet." />
       <figcaption class="cap">
-        The whole app. Green means the artwork sits inside the safety boundary — if it
-        doesn't, Send is disabled and the server refuses the job.
+        Four pages of one PDF laid out on an Arch B sheet, ready to go as a single cut job.
+        Green means a page sits inside the safety boundary and clear of the others — if
+        not, Send is disabled and the server refuses the job.
       </figcaption>
     </figure>
   </div>
@@ -264,8 +267,9 @@
       </div>
       <div class="card">
         <h3>A boundary the software enforces</h3>
-        <p>You calibrate the bed once. Artwork that crosses the safety margin turns red,
-          Send goes dead, and the server refuses the job even over the API.</p>
+        <p>You calibrate the bed once. Artwork that crosses the safety margin — or
+          overlaps another page — turns red, Send goes dead, and the server refuses the
+          job even over the API.</p>
       </div>
       <div class="card">
         <h3>The datasheet, built in</h3>
@@ -278,6 +282,63 @@
           laser on your own network. No account, no upload, no cloud.</p>
       </div>
     </div>
+  </div>
+</section>
+
+<section id="layout">
+  <div class="wrap">
+    <p class="eyebrow">Lay out a whole sheet</p>
+    <h2>Every page of the PDF, on the stock you actually have</h2>
+    <p class="lede" style="margin-bottom:34px">
+      Put a batch of parts on one larger sheet and cut them in one go. Helix Studio
+      shows the sheet where it really sits on the bed, places each page in the next free
+      spot, and refuses to send anything that collides.
+    </p>
+    <div class="grid3">
+      <div class="card">
+        <h3>Multi-page PDFs</h3>
+        <p>Every page appears as a thumbnail. Page 1 starts on the bed; <b>Include</b>
+          adds any other page in the first free spot on your sheet, or <b>Include all</b>
+          lays out the lot. All of them go to the laser as one job.</p>
+      </div>
+      <div class="card">
+        <h3>Overlaps caught before they're cut</h3>
+        <p>Pages that collide turn red, the shared area is shaded, and Send stays off
+          until you drag them apart. The server checks again, so a script can't slip one
+          through.</p>
+      </div>
+      <div class="card">
+        <h3>Your material, drawn on the bed</h3>
+        <p>Pick a stock size — ISO A2–A6, Arch A–C, Letter, Legal, Tabloid — and only
+          the sizes that fit your machine are offered. Drag the sheet, or type its X/Y, to
+          match where the material really lies.</p>
+      </div>
+      <div class="card">
+        <h3>Rotation that checks first</h3>
+        <p>Turning the sheet or a page 90° is only offered when the result still fits
+          from where it sits. When it doesn't, the card says why and how far to move.</p>
+      </div>
+      <div class="card">
+        <h3>Knows when the laser is there</h3>
+        <p>The top bar shows the laser's IP with a live dot. Unplug it and the chip turns
+          into <b>Scan</b>, sweeping your local network for the machine until it's back.</p>
+      </div>
+      <div class="card">
+        <h3>Cut lines where they really are</h3>
+        <p>Each page's box covers its ink <em>and</em> every vector path, so a hairline
+          or clipped cut can never land outside the area the safety checks look at.</p>
+      </div>
+    </div>
+    <figure class="shot inline">
+      <img class="dark-only" src="./assets/overlap-dark.png" width="2880" height="1800" loading="lazy"
+           alt="The hexagon page dragged on top of the gift tag and the sun motif: all three pages are outlined in red, the overlapping area is shaded, and the Artwork card lists both overlaps with Sending disabled." />
+      <img class="light-only" src="./assets/overlap-light.png" width="2880" height="1800" loading="lazy"
+           alt="The same overlap in the light theme: overlapping pages in red with the shared area shaded, and the warning in the Artwork card." />
+      <figcaption class="cap">
+        Drag one page onto another and both turn red — Send stays disabled until they're
+        apart.
+      </figcaption>
+    </figure>
   </div>
 </section>
 
@@ -308,9 +369,10 @@
           attached.</p>
       </div>
       <div class="card">
-        <h3>Both on one piece</h3>
-        <p>Send the engrave, switch the preset, send the cut. Both jobs are placed from
-          the same origin, so they line up on the material.</p>
+        <h3>Several pages, one job</h3>
+        <p>For engraving, every placed page is merged into one raster, and blank rows cost
+          nothing. For cutting, the paths are simply joined. Each page lands exactly where
+          it would if you sent it on its own.</p>
       </div>
     </div>
   </div>
@@ -344,7 +406,8 @@ python3 -m pip install -r requirements.txt</pre>
         <h3>Point it at your machine</h3>
         <p>Copy <code>config.example.json</code> to <code>config.json</code> and set your
           laser's IP address and your own bed measurements. The shipped calibration
-          describes one specific machine — it is not yours.</p>
+          describes one specific machine — it is not yours. If the laser isn't where the
+          config says, the IP chip turns into <b>Scan</b> and looks for it on your network.</p>
       </li>
       <li>
         <h3>Run it</h3>
