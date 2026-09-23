@@ -9,11 +9,13 @@ sends them to the Epilog Helix.
   GET  /preview/<id>.png     -> rendered preview
   POST /api/send             -> JSON assignments; builds & sends jobs (or dry-run)
 
-Bound to 127.0.0.1 only. Depends on: Poppler CLI + Pillow + driver/*.
+Bound to 127.0.0.1 by default. Depends on: Poppler CLI + Pillow + driver/*.
 """
 
+import argparse
 import json
 import os
+import shutil
 import sys
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,11 +26,13 @@ sys.path.insert(0, os.path.join(HERE, "driver"))
 import epilog          # noqa: E402
 import pdfjob          # noqa: E402
 
-PORT = 4060
-HOST = "127.0.0.1"
-LASER_HOST = "192.168.1.6"
+DEFAULT_PORT = 4060
+DEFAULT_BIND = "127.0.0.1"
+DEFAULT_LASER_HOST = "192.168.1.6"
 PREVIEW_DPI = 120
 MAX_UPLOAD = 64 * 1024 * 1024
+
+CFG = {}        # filled by load_config() before the server starts
 
 SESSIONS = {}   # id -> {pdf_path, preview_png, info}
 TMPDIR = os.path.join(HERE, ".sessions")
@@ -43,6 +47,64 @@ def load_materials():
 def load_machine():
     with open(os.path.join(HERE, "data", "machine.json")) as f:
         return json.load(f)
+
+
+def load_config(argv=None):
+    """Settings in layers, each one overriding the one before it:
+
+        built-in defaults
+          <- data/machine.json        (bed calibration shipped with the repo)
+          <- config.json              (yours; gitignored, survives a git pull)
+          <- HELIX_* environment vars
+          <- command-line flags
+
+    config.json takes the same shape as the returned dict, e.g.
+    {"laser_host": "10.0.0.9", "machine": {"bed_w_mm": 610, "safety_mm": 12}};
+    its "machine" keys are merged over the shipped calibration, so you only
+    name the ones you are changing. See config.example.json.
+    """
+    cfg = {"bind": DEFAULT_BIND, "port": DEFAULT_PORT,
+           "laser_host": DEFAULT_LASER_HOST, "machine": load_machine()}
+
+    path = os.environ.get("HELIX_CONFIG", os.path.join(HERE, "config.json"))
+    if os.path.exists(path):
+        with open(path) as f:
+            user = json.load(f)
+        cfg["machine"].update(user.pop("machine", {}) or {})
+        cfg.update({k: v for k, v in user.items() if not k.startswith("_")})
+        cfg["config_path"] = path
+
+    if os.environ.get("HELIX_LASER_HOST"): cfg["laser_host"] = os.environ["HELIX_LASER_HOST"]
+    if os.environ.get("HELIX_PORT"):       cfg["port"] = int(os.environ["HELIX_PORT"])
+    if os.environ.get("HELIX_BIND"):       cfg["bind"] = os.environ["HELIX_BIND"]
+
+    ap = argparse.ArgumentParser(description="Helix Studio — PDF to Epilog laser jobs.")
+    ap.add_argument("--laser", metavar="IP", help="laser IP address (LPD port 515)")
+    ap.add_argument("--port", type=int, help="port for the web UI (default %d)" % DEFAULT_PORT)
+    ap.add_argument("--bind", metavar="ADDR",
+                    help="interface to bind (default %s — localhost only)" % DEFAULT_BIND)
+    args = ap.parse_args(argv)
+    if args.laser: cfg["laser_host"] = args.laser
+    if args.port:  cfg["port"] = args.port
+    if args.bind:  cfg["bind"] = args.bind
+    return cfg
+
+
+def preflight():
+    """Fail early, and with an actionable message, when a dependency is absent.
+    Poppler ships as command-line tools, so it is the one people don't have."""
+    missing = [t for t in ("pdfinfo", "pdftocairo") if not shutil.which(t)]
+    if missing:
+        hint = {"darwin": "brew install poppler",
+                "win32": "winget install --id oschwartz10612.Poppler  "
+                         "(or choco install poppler) — then reopen the terminal",
+                }.get(sys.platform, "sudo apt install poppler-utils   # or: sudo dnf install poppler-utils")
+        sys.exit("helix-studio: Poppler is required but %s not on PATH.\n  %s"
+                 % (" and ".join(missing) + (" is" if len(missing) == 1 else " are"), hint))
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        sys.exit("helix-studio: Pillow is required.\n  python3 -m pip install -r requirements.txt")
 
 
 def _rot_point(x, y, R, cw, ch):
@@ -101,8 +163,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/materials":
             return self._send_json(load_materials())
         if path == "/api/config":
-            mc = load_machine()
-            return self._send_json({"laser_host": LASER_HOST, "machine": mc,
+            mc = CFG["machine"]
+            return self._send_json({"laser_host": CFG["laser_host"], "machine": mc,
                                     "machines": [mc]})
         if path.startswith("/preview/"):
             sid = path[len("/preview/"):].rsplit(".", 1)[0]
@@ -179,12 +241,12 @@ class Handler(BaseHTTPRequestHandler):
         s = SESSIONS.get(sid)
         if not s:
             return self._send_json({"error": "unknown session"}, 404)
-        host = req.get("host", LASER_HOST)
+        host = req.get("host", CFG["laser_host"])
         offset = req.get("offset_mm", [0, 0])
         ox, oy = float(offset[0]), float(offset[1])
         autofocus = bool(req.get("autofocus", False))
         dry_run = bool(req.get("dry_run", False))
-        mc = load_machine()
+        mc = CFG["machine"]
 
         # --- global content bbox (mm) so all layers crop/translate consistently ---
         bbox_rgb = pdfjob.render_rgb(s["pdf_path"], dpi=PREVIEW_DPI, page=1)
@@ -301,8 +363,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    srv = ThreadingHTTPServer((HOST, PORT), Handler)
-    print("helix-studio on http://%s:%d  (laser %s)" % (HOST, PORT, LASER_HOST))
+    preflight()
+    CFG.update(load_config())
+    srv = ThreadingHTTPServer((CFG["bind"], CFG["port"]), Handler)
+    if "config_path" in CFG:
+        print("helix-studio: settings from %s" % CFG["config_path"])
+    print("helix-studio on http://%s:%d  (laser %s)"
+          % (CFG["bind"], CFG["port"], CFG["laser_host"]))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

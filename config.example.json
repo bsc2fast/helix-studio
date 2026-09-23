@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy to config.json and edit. config.json is gitignored, so your laser IP and bed calibration survive a git pull. Every key is optional — anything you leave out keeps the shipped default. Flags (--laser/--port/--bind) and HELIX_* env vars override this file.",
+
+  "laser_host": "192.168.1.6",
+  "port": 4060,
+  "bind": "127.0.0.1",
+
+  "machine": {
+    "_comment": "Merged over data/machine.json, so name only what differs. usable_* is the far edge the head was confirmed to reach; safety_mm is the no-go border the server refuses to cross. Verify with a frame test before widening either.",
+    "name": "Epilog Helix 24x18 (30W)",
+    "bed_w_mm": 609.6,
+    "bed_h_mm": 457.2,
+    "usable_w_mm": 605.0,
+    "usable_h_mm": 450.0,
+    "margin_mm": 3.0,
+    "safety_mm": 10.0
+  }
+}

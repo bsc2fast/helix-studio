@@ -1,77 +1,238 @@
 # Helix Studio
 
-A small local web tool that turns a **PDF into laser jobs** for the Epilog
-Helix and sends them over the network — no VisiCut, no Windows driver, no CUPS.
+Turn a **PDF into laser jobs** for an Epilog Helix (or Mini) and send them over
+the network — no VisiCut, no Windows-only Epilog driver, no CUPS printer queue.
 
-Import a PDF → it detects colour "layers" → assign each colour to **cut** or
-**engrave**, pick a **material** (Epilog's suggested settings load
-automatically) → **Send**. Jobs queue on the laser; you press **GO** to run.
+It runs as a small local web app: you start a Python server on your own
+machine, open `http://localhost:4060` in any browser, drop in a PDF, place it
+on a picture of the bed, pick a material preset, and hit **Send**. The job
+queues on the laser and you press **GO** on the machine itself.
 
-## Run
-
-VS Code: **Run and Debug → "Serve Helix Studio + open browser"**
-(serves <http://localhost:4060>, opens Chrome). Or:
-
-```sh
-python3 server.py      # then open http://localhost:4060
+```text
+   PDF  ──▶  place on the bed  ──▶  pick material + preset  ──▶  Send  ──▶  press GO
 ```
 
-Requirements (already present on this Mac): **Poppler** (`pdftocairo`,
-`pdfinfo`), **Pillow**, Python 3. The laser is reached over Ethernet at
-`192.168.1.6:515` — see `../farewell-coasters/LASER-SETUP.md`.
+* Works on macOS, Windows and Linux — the only interface is your browser.
+* Nothing leaves your machine. The server binds to localhost, and the only
+  outbound connection is to the laser on your own network.
+* Material presets are Epilog's published suggested settings for a **30-watt**
+  Helix/Mini, transcribed from the datasheet.
+
+---
+
+## ⚠️ Before anything else
+
+A laser cutter is a fire hazard and a machine that can hurt you.
+
+* **Never run a job unattended**, and keep the lid closed and extraction on.
+* The shipped presets are **starting points from Epilog's datasheet for a 30 W
+  tube**. Your machine's real power, optics and material differ. **Always test
+  on scrap first.**
+* The bed size and safe travel in `data/machine.json` are the calibration of
+  *one specific machine*. **They are almost certainly wrong for yours** —
+  see [Configure your machine](#3-configure-your-machine) before your first send.
+  The server refuses out-of-bounds jobs, but that guard is only as good as
+  the numbers you give it.
+* This software is provided as-is, with no warranty (see [LICENSE](LICENSE)).
+  You are responsible for what your laser does.
+
+---
+
+## Requirements
+
+| What | Why | Notes |
+|---|---|---|
+| **Python 3.9+** | runs the server | `python3 --version` |
+| **Pillow** | rasterises the artwork | installed with pip, below |
+| **Poppler** | reads and renders the PDF (`pdfinfo`, `pdftocairo`) | a separate install, below |
+| **An Epilog Helix / Mini on your network** | receives the job over LPD (port 515) | you need its IP address |
+
+---
+
+## Install
+
+### 1. Install Poppler
+
+**macOS** (with [Homebrew](https://brew.sh)):
+
+```sh
+brew install poppler
+```
+
+**Windows** (PowerShell):
+
+```powershell
+winget install --id oschwartz10612.Poppler
+```
+
+Then **close and reopen the terminal** so the new `PATH` takes effect. If
+`pdfinfo -v` still isn't found, add Poppler's `bin` folder to your `PATH`
+manually. (`choco install poppler` works too, if you use Chocolatey.)
+
+**Linux**:
+
+```sh
+sudo apt install poppler-utils      # Debian / Ubuntu
+sudo dnf install poppler-utils      # Fedora
+```
+
+Check it worked — this should print a version, not "command not found":
+
+```sh
+pdfinfo -v
+```
+
+### 2. Get Helix Studio and its Python dependency
+
+```sh
+git clone https://github.com/bsc2fast/helix-studio.git
+cd helix-studio
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python3 -m pip install -r requirements.txt
+```
+
+The virtual environment is optional but recommended; without it,
+`python3 -m pip install --user -r requirements.txt` is fine.
+
+### 3. Configure your machine
+
+Copy the example config and edit it with your own laser's IP address and bed
+measurements:
+
+```sh
+cp config.example.json config.json     # Windows: copy config.example.json config.json
+```
+
+```jsonc
+{
+  "laser_host": "192.168.1.6",   // your laser's IP address
+  "machine": {
+    "name": "Epilog Helix 24x18 (30W)",
+    "bed_w_mm": 609.6,           // full bed, X = the long axis
+    "bed_h_mm": 457.2,
+    "usable_w_mm": 605.0,        // how far the head actually reaches, measured
+    "usable_h_mm": 450.0,
+    "safety_mm": 10.0            // no-go border; jobs crossing it are refused
+  }
+}
+```
+
+`config.json` is gitignored, so your settings survive a `git pull`. Any key you
+leave out keeps the shipped default. **Find your laser's IP** on the machine's
+own control panel, under its network/TCP-IP settings.
+
+> Start conservative with `usable_*`. Widen it only after you have watched the
+> head travel to that edge and clear the rails.
+
+### 4. Run it
+
+```sh
+python3 server.py
+```
+
+It prints:
+
+```text
+helix-studio: settings from /path/to/helix-studio/config.json
+helix-studio on http://127.0.0.1:4060  (laser 192.168.1.6)
+```
+
+Open <http://localhost:4060>. Leave the terminal running while you work; press
+`Ctrl-C` to stop the server.
+
+Useful flags — these beat `config.json`, which beats the shipped defaults:
+
+```sh
+python3 server.py --laser 10.0.0.9      # a different laser, just this once
+python3 server.py --port 4070           # if 4060 is taken
+python3 server.py --bind 0.0.0.0        # let other machines on the LAN use it
+```
+
+`HELIX_LASER_HOST`, `HELIX_PORT`, `HELIX_BIND` and `HELIX_CONFIG` do the same
+as environment variables.
+
+> `--bind 0.0.0.0` exposes the UI — and through it your laser — to everyone on
+> the network, with no password. Only do that on a network you trust.
+
+---
+
+## Using it
+
+1. **Drop a PDF** onto the page (or click to choose one). Vector artwork works
+   best; the page is cropped to its ink, so whitespace around the design is
+   ignored.
+2. **Place it.** Drag the artwork around the bed picture, or type X/Y in mm.
+   X/Y is measured from the laser's home corner (top-left). `Rotate` turns it
+   in 90° steps, `Center` centres it in the safe area. The outline is green
+   while the placement is legal and red once it crosses the dashed safety
+   boundary — and **Send** is disabled while it is red.
+3. **Pick material and thickness**, then a **preset**. Engrave presets (`▦`)
+   raster the artwork; cut presets (`✂`) follow its vector lines. Presets that
+   cannot cut through the thickness you chose are hidden.
+4. **Send.** The job appears on the laser's queue; walk over and press **GO**.
+
+**To engrave and then cut the same piece**, send twice: choose the engrave
+preset and send, then switch to the cut preset and send again without moving
+anything. Both jobs are placed from the same origin, so they line up.
+
+---
 
 ## How it works
 
 ```text
-PDF ──pdftocairo──► preview + colour raster ──► detect layers (colours)
-                         │                            │
-                         │ engrave                    │ cut
-                         ▼                            ▼
-              raster mask per colour        vector paths per colour
-              (1-bit, PackBits)             (SVG flattened to mm)
-                         └──────────► epilog.py ◄──────┘
-                              PJL/PCL + HP-GL over LPD:515
+PDF ──pdftocairo──► preview + raster ──┬──► engrave: 1-bit mask (PackBits)
+                                       └──► cut: vector paths flattened to mm
+                                                     │
+                                                     ▼
+                                         PJL / PCL + HP-GL over LPD:515
 ```
 
-- `driver/epilog.py` — standalone Epilog driver (vector + raster + LPD send),
-  ported from liblasercut. Vector cuts get a small **overcut** so the first
-  edge isn't left uncut by the laser's start-of-vector firing lag.
-- `driver/pdfjob.py` — PDF → page info, colour raster, layer detection, and
-  vector extraction (via Poppler + a compact SVG path flattener).
-- `data/materials.json` — Epilog Mini/Helix suggested settings, **30-watt
-  column**, transcribed from the official datasheet. Drives the material
-  dropdown; these are *starting points* — always test on scrap.
-- `server.py` — local web server + REST API.
-- `web/` — the UI.
+| Path | What it is |
+|---|---|
+| `server.py` | the local web server + REST API, and the out-of-bounds guard |
+| `driver/epilog.py` | standalone Epilog driver (raster + vector + LPD send), ported from liblasercut. Vector cuts get a small **overcut** so the laser's start-of-vector firing lag doesn't leave the first edge uncut |
+| `driver/pdfjob.py` | PDF → page size, colour raster, layer detection, vector extraction (Poppler + a compact SVG path flattener) |
+| `data/materials.json` | Epilog Mini/Helix suggested settings, 30 W column |
+| `data/machine.json` | the shipped bed calibration — override it in `config.json` |
+| `web/` | the UI (one HTML file, one JS file, no build step, no dependencies) |
 
-## Placement & bed safety (calibration)
+Speed and power are 0–100 %. Engraving is specified in **DPI**, cutting in
+**frequency (Hz)**.
 
-Artwork is **cropped to its ink bounding box** and placed at your **X/Y offset**
-from the machine home corner (top-left) — so a small design on a big page
-engraves near the origin, not at its page position (this was the original
-"head drives into the Y wall" bug).
+The REST API is small enough to drive from a script: `POST /api/import` with
+raw PDF bytes, then `POST /api/send` with a placement and either a single
+`operation` or a list of per-colour `assignments`.
 
-- **`data/machine.json`** is the bed calibration: `bed_w_mm` / `bed_h_mm`, a
-  conservative `usable_w_mm` / `usable_h_mm`, and a `margin_mm`. The server
-  **refuses any job** whose placed artwork would exceed `usable − margin`, so a
-  job can't drive the head into a wall. Start conservative; widen only after a
-  frame test confirms the head clears the rails.
-- The UI shows a **bed-placement preview** (artwork rectangle inside the bed,
-  green = fits, red = out of bounds) and disables sending when out of bounds.
-- **Frame test** button: traces the artwork's bounding box at low power so you
-  can watch the head walk the perimeter and confirm it stays on the material
-  *before* committing to the real burn.
+---
 
-## Settings notation
+## Troubleshooting
 
-`speed` / `power` are 0–100 %. Engraving uses **DPI**; cutting uses **frequency
-(Hz)**. Every material's operations come straight from the datasheet.
+**`Poppler is required but pdfinfo is not on PATH`** — step 1 didn't take
+effect. On Windows, reopen the terminal after installing.
 
-## Status / next
+**`Address already in use`** — something else holds port 4060. Use
+`python3 server.py --port 4070`.
 
-- ✅ Import, preview, layer detection, material auto-settings, engrave (raster),
-  cut (vector), dry-run, send over LPD — all working end to end.
-- Each assigned colour is sent as its **own job** (aligned to the same origin);
-  combining same-DPI parts into one job is a possible enhancement.
-- Colour layers come from the rendered raster; very finely anti-aliased art may
-  merge near-colours. Use distinct flat colours per operation (Lightburn-style).
+**The job never arrives / Send hangs** — check `laser_host` is right and that
+the machine is on and idle: `ping <laser-ip>`. The laser must be reachable on
+TCP port 515, which means the same network segment as your computer, no VPN in
+the way.
+
+**"No printable artwork detected"** — the first page rendered blank. Check the
+PDF isn't a single huge white image, or that the artwork isn't on page 2.
+
+**A cut preset does nothing** — cutting follows *vector* paths. A PDF that
+contains only a photo or a flattened bitmap has none; export vectors from your
+design tool, or use an engrave preset instead.
+
+**The engraving came out lighter or deeper than expected** — that is the
+preset meeting your actual machine. Adjust speed/power in
+`data/materials.json`, and test on scrap.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE). Not affiliated with, or endorsed by, Epilog
+Laser. "Epilog" and "Helix" are their trademarks.
