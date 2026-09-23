@@ -1,0 +1,47 @@
+
+ ⛅️ wrangler 4.136.3
+────────────────────
+
+Cloudflare collects anonymous telemetry about your usage of Wrangler. Learn more at https://github.com/cloudflare/workers-sdk/tree/main/packages/wrangler/telemetry.md
+Your Worker has access to the following bindings:
+Binding            Resource      Mode
+env.ASSETS         Assets        local
+
+⎔ Starting local server...
+Wrangler detected this dev session is running in an AI agent.
+The Local Explorer API is available at http://localhost:4055/cdn-cgi/local/explorer/api
+Useful routes:
+  GET http://localhost:4055/cdn-cgi/local/explorer/api/local/workers - local Workers and bindings
+  GET http://localhost:4055/cdn-cgi/local/explorer/api/storage/kv/namespaces - KV namespaces
+  GET http://localhost:4055/cdn-cgi/local/explorer/api/d1/database - D1 databases
+  GET http://localhost:4055/cdn-cgi/local/explorer/api/r2/buckets - R2 buckets
+  GET http://localhost:4055/cdn-cgi/local/explorer/api/workers/durable_objects/namespaces - Durable Object namespaces
+  GET http://localhost:4055/cdn-cgi/local/explorer/api/workflows - Workflows
+  POST http://localhost:4055/cdn-cgi/local/explorer/api/local/observability/query - run a read-only SQL query (SELECT/WITH only) over captured request traces and console logs. Tables: spans, logs (read attributes via json(attributes)). Example:
+    curl -X POST http://localhost:4055/cdn-cgi/local/explorer/api/local/observability/query -H 'Content-Type: application/json' -d '{"sql":"SELECT service, name, outcome, duration_ms FROM spans WHERE parent_id IS NULL LIMIT 20"}'
+  POST http://localhost:4055/cdn-cgi/local/explorer/api/local/observability/clear - clear all captured traces and logs
+If the routes above don't cover what you need, fetch the full OpenAPI schema (large - use only as a last resort):
+  GET http://localhost:4055/cdn-cgi/local/explorer/api - OpenAPI schema
+[wrangler:info] Ready on http://localhost:4055
+[wrangler:info] GET / 200 OK (13ms)
+[wrangler:info] GET /assets/app-dark.png 200 OK (3ms)
+[wrangler:info] GET / 200 OK (8ms)
+[wrangler:info] GET /assets/app-dark.png 200 OK (5ms)
+[wrangler:info] GET /assets/app-light.png 200 OK (7ms)
+[wrangler:info] GET / 200 OK (4ms)
+[wrangler:info] GET /assets/app-dark.png 200 OK (3ms)
+[wrangler:info] GET /assets/app-light.png 200 OK (6ms)
+[wrangler:info] GET / 200 OK (4ms)
+[wrangler:info] GET /assets/app-dark.png 200 OK (4ms)
+[wrangler:info] GET /assets/app-light.png 200 OK (6ms)
+[wrangler:info] GET / 200 OK (3ms)
+[wrangler:info] GET /assets/app-dark.png 200 OK (3ms)
+[wrangler:info] GET /assets/app-light.png 200 OK (5ms)
+⎔ Reloading local server...
+⎔ Local server updated and ready
+[wrangler:info] GET / 200 OK (14ms)
+[wrangler:info] GET /assets/app-dark.png 200 OK (14ms)
+[wrangler:info] GET /assets/app-light.png 200 OK (14ms)
+[wrangler:info] GET / 200 OK (6ms)
+[wrangler:info] GET /assets/app-dark.png 200 OK (5ms)
+[wrangler:info] GET /assets/app-light.png 200 OK (8ms)

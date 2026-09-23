@@ -1,0 +1,19 @@
+{
+  // Cloudflare Worker serving the Helix Studio marketing site (site/public).
+  // Deploy:  cd site && npm install && npx wrangler deploy
+  // Requires CLOUDFLARE_API_TOKEN in the environment, or `npx wrangler login`.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "helix-studio-site",
+  "compatibility_date": "2025-01-01",
+  "main": "src/index.js",
+
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+
+  // The sankhacooray.com zone is on Cloudflare, so the subdomain is attached here.
+  "routes": [
+    { "pattern": "helix.sankhacooray.com", "custom_domain": true }
+  ]
+}

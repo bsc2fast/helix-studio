@@ -1,0 +1,13 @@
+{
+  "name": "helix-studio-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Marketing site for Helix Studio (Cloudflare Worker serving ./public)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Helix Studio — send a PDF to your Epilog laser, from any browser</title>
+<meta name="description" content="A small local web app that turns a PDF into Epilog Helix laser jobs and sends them over the network. No VisiCut, no Windows-only driver, no CUPS queue. Open source, MIT." />
+<link rel="canonical" href="https://helix.sankhacooray.com/" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://helix.sankhacooray.com/" />
+<meta property="og:title" content="Helix Studio — send a PDF to your Epilog laser, from any browser" />
+<meta property="og:description" content="Drop a PDF, place it on the bed, pick a material preset, send. A local web app for the Epilog Helix and Mini — no driver, no queue, no cloud." />
+<meta property="og:image" content="https://helix.sankhacooray.com/assets/app-dark.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="theme-color" content="#14151a" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314151a'/%3E%3Ccircle cx='16' cy='16' r='7.5' fill='none' stroke='%237bd88f' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='2' fill='%237bd88f'/%3E%3C/svg%3E" />
+<style>
+  :root{
+    --bg:#14151a; --panel:#1d1f27; --panel2:#262933; --line:#333644;
+    --ink:#e8e9ee; --muted:#9297a8; --accent:#7bd88f; --accent2:#6aa8ff;
+    --warn:#ffb454; --danger:#ff6b6b;
+    --maxw:1060px; --radius:14px;
+    --shadow:0 18px 50px rgba(0,0,0,.45);
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#eef1f5; --panel:#ffffff; --panel2:#e7ebf1; --line:#d6dae2;
+      --ink:#1a1c22; --muted:#5b6274; --accent:#1f9d4d; --accent2:#2f6fed;
+      --warn:#c77d15; --danger:#d23b3b;
+      --shadow:0 18px 44px rgba(20,30,60,.16);
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 20px}
+  a{color:var(--accent2)}
+  h1,h2,h3{line-height:1.2;letter-spacing:-.02em;margin:0 0 .5em}
+  h2{font-size:clamp(24px,3.4vw,32px);margin-top:0}
+  p{margin:0 0 1em}
+  section{padding:68px 0;border-top:1px solid var(--line)}
+  section:first-of-type{border-top:0}
+  .eyebrow{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 12px}
+  .lede{font-size:clamp(17px,2vw,19px);color:var(--muted);max-width:60ch}
+
+  /* ---- top bar ---- */
+  header{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  header .wrap{display:flex;align-items:center;gap:16px;height:58px}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:650;letter-spacing:-.01em}
+  .brand svg{display:block}
+  header nav{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:14px}
+  header nav a{color:var(--muted);text-decoration:none}
+  header nav a:hover{color:var(--ink)}
+  @media (max-width:620px){ header nav a.hide-sm{display:none} }
+
+  /* ---- buttons ---- */
+  .btn{display:inline-flex;align-items:center;gap:8px;border-radius:10px;padding:11px 18px;
+    font-weight:600;font-size:15px;text-decoration:none;border:1px solid var(--line);
+    background:var(--panel2);color:var(--ink)}
+  .btn:hover{border-color:var(--accent2)}
+  .btn.primary{background:var(--accent2);border-color:var(--accent2);color:#fff}
+  .btn.primary:hover{filter:brightness(1.07)}
+  .cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:26px}
+
+  /* ---- hero ---- */
+  .hero{padding:84px 0 56px}
+  .hero h1{font-size:clamp(34px,6vw,56px);margin-bottom:18px}
+  .hero h1 .grad{color:var(--accent)}
+  .shot{margin-top:46px;border:1px solid var(--line);border-radius:var(--radius);
+    overflow:hidden;box-shadow:var(--shadow);background:var(--panel)}
+  .shot img{display:block;width:100%;height:auto}
+  .shot .cap{padding:11px 16px;font-size:13px;color:var(--muted);border-top:1px solid var(--line)}
+  img.light-only{display:none}
+  @media (prefers-color-scheme: light){
+    img.dark-only{display:none}
+    img.light-only{display:block}
+  }
+
+  /* ---- flow strip ---- */
+  .flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:34px 0 0;padding:0;list-style:none}
+  .flow li{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px 15px;
+    font-size:14px;position:relative}
+  .flow b{display:block;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);
+    margin-bottom:5px;font-weight:700}
+  @media (max-width:760px){ .flow{grid-template-columns:1fr 1fr} }
+
+  /* ---- problem / solution ---- */
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:start}
+  @media (max-width:860px){ .split{grid-template-columns:1fr} }
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:24px}
+  .card h3{font-size:17px;margin-bottom:10px}
+  .card p:last-child{margin-bottom:0}
+  ul.checks{list-style:none;margin:0;padding:0}
+  ul.checks li{position:relative;padding-left:30px;margin-bottom:13px;color:var(--muted)}
+  ul.checks li:last-child{margin-bottom:0}
+  ul.checks li strong{color:var(--ink);font-weight:600}
+  ul.checks li::before{position:absolute;left:0;top:-1px;font-size:15px}
+  ul.pains li::before{content:"×";color:var(--danger);font-size:19px;line-height:1.3}
+  ul.wins li::before{content:"✓";color:var(--accent)}
+
+  /* ---- feature grid ---- */
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  @media (max-width:860px){ .grid3{grid-template-columns:1fr} }
+
+  /* ---- code ---- */
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;
+    overflow:auto;font-size:13.5px;line-height:1.7;margin:0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre .c{color:var(--muted)}
+  pre .k{color:var(--accent)}
+  .steps{counter-reset:step;list-style:none;margin:0;padding:0}
+  .steps>li{counter-increment:step;position:relative;padding-left:46px;margin-bottom:26px}
+  .steps>li:last-child{margin-bottom:0}
+  .steps>li::before{content:counter(step);position:absolute;left:0;top:0;width:30px;height:30px;
+    border-radius:50%;background:var(--panel2);border:1px solid var(--line);color:var(--accent);
+    display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700}
+  .steps h3{font-size:16px;margin-bottom:8px}
+
+  /* ---- pipeline ---- */
+  .pipe{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;
+    overflow:auto;color:var(--muted);font-size:13px;line-height:1.7;margin:0}
+
+  /* ---- safety ---- */
+  .safety{border:1px solid var(--warn);border-radius:var(--radius);padding:22px 24px;
+    background:color-mix(in srgb,var(--warn) 9%,transparent)}
+  .safety h2{font-size:20px}
+  .safety p:last-child{margin-bottom:0}
+
+  table{width:100%;border-collapse:collapse;font-size:14.5px}
+  th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;letter-spacing:.06em;text-transform:uppercase}
+  td:first-child{white-space:nowrap;font-weight:600}
+
+  footer{border-top:1px solid var(--line);padding:34px 0 52px;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;flex-wrap:wrap;gap:14px 26px;align-items:center}
+  footer .sp{margin-left:auto}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="brand">
+      <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="10.5" fill="none" stroke="currentColor" stroke-width="2" opacity=".45"/>
+        <circle cx="16" cy="16" r="3" fill="var(--accent)"/>
+      </svg>
+      Helix Studio
+    </span>
+    <nav>
+      <a href="#problem" class="hide-sm">Why</a>
+      <a href="#how" class="hide-sm">How it works</a>
+      <a href="#start">Get started</a>
+      <a href="https://github.com/bsc2fast/helix-studio">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Open source · MIT</p>
+    <h1>Send a PDF to your Epilog laser<br><span class="grad">from any browser.</span></h1>
+    <p class="lede">
+      Helix Studio is a small web app that runs on your own machine. Drop in a PDF,
+      place it on a true-to-scale picture of the bed, pick a material preset, and the
+      job goes straight to an Epilog Helix or Mini over the network — no VisiCut, no
+      Windows-only print driver, no CUPS queue.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/bsc2fast/helix-studio">View the code on GitHub</a>
+      <a class="btn" href="#start">Get started</a>
+    </div>
+
+    <ol class="flow">
+      <li><b>1 · Import</b>Drop in a PDF. It's cropped to its ink.</li>
+      <li><b>2 · Place</b>Drag it on the bed, or type X/Y in mm.</li>
+      <li><b>3 · Choose</b>Material, thickness, engrave or cut preset.</li>
+      <li><b>4 · Send</b>The job queues. You press GO on the machine.</li>
+    </ol>
+
+    <figure class="shot">
+      <img class="dark-only" src="./assets/app-dark.png" width="2880" height="1800"
+           alt="Helix Studio: a circular design placed on a scale drawing of the laser bed, with rulers in millimetres, a dashed safety boundary, and a placement panel showing X, Y and rotation." />
+      <img class="light-only" src="./assets/app-light.png" width="2880" height="1800"
+           alt="Helix Studio in its light theme, showing the same design placed on the laser bed." />
+      <figcaption class="cap">
+        The whole app. Green means the artwork sits inside the safety boundary — if it
+        doesn't, Send is disabled and the server refuses the job.
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="problem">
+  <div class="wrap">
+    <p class="eyebrow">The problem</p>
+    <h2>Getting a drawing onto a laser cutter is the hard part</h2>
+    <p class="lede" style="margin-bottom:34px">
+      The machine itself is willing. Everything between your design and the bed is
+      what gets in the way.
+    </p>
+    <div class="split">
+      <div class="card">
+        <h3>The usual path</h3>
+        <ul class="checks pains">
+          <li><strong>A Windows-only print driver.</strong> The supported workflow runs
+            through Epilog's driver and dashboard, so the lab keeps one ageing Windows
+            box alive purely to talk to the laser.</li>
+          <li><strong>Or a chain of workarounds.</strong> VisiCut, a CUPS queue, an
+            export-to-SVG-then-fix-it dance — each with its own version drift.</li>
+          <li><strong>Settings live on a taped-up datasheet.</strong> Speed, power,
+            frequency and DPI get retyped from a PDF, or guessed.</li>
+          <li><strong>Nothing checks the geometry.</strong> Send a job placed off the
+            bed and the head drives into the rail. You find out by listening.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>What that costs you</h3>
+        <ul class="checks pains">
+          <li><strong>A queue at one computer.</strong> One driver machine is a
+            bottleneck in a shared workshop.</li>
+          <li><strong>Mac and Linux users are stuck</strong> exporting files and
+            walking them over.</li>
+          <li><strong>Wasted material.</strong> Wrong power on the wrong acrylic is a
+            ruined sheet and a re-cut.</li>
+          <li><strong>Jobs you can't reproduce.</strong> "What settings did we use last
+            time?" has no answer.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="solution">
+  <div class="wrap">
+    <p class="eyebrow">The solution</p>
+    <h2>Talk to the laser directly, from a page you already have open</h2>
+    <p class="lede" style="margin-bottom:34px">
+      An Epilog on the network already speaks a printing protocol. Helix Studio builds
+      the job itself and sends it over that protocol, so nothing else has to be installed
+      between you and the machine.
+    </p>
+    <div class="grid3">
+      <div class="card">
+        <h3>No driver, no queue</h3>
+        <p>A Python server on your own computer builds the raster and vector job and
+          hands it to the laser over LPD on port 515. Nothing else in the chain.</p>
+      </div>
+      <div class="card">
+        <h3>Any operating system</h3>
+        <p>The interface is a browser page, so macOS, Windows and Linux all work the
+          same way. Nothing to code-sign, nothing to keep updated.</p>
+      </div>
+      <div class="card">
+        <h3>Placement you can see</h3>
+        <p>A scale drawing of the bed with millimetre rulers. Drag the artwork or type
+          coordinates; it's cropped to its ink, so page margins don't shift it.</p>
+      </div>
+      <div class="card">
+        <h3>A boundary the software enforces</h3>
+        <p>You calibrate the bed once. Artwork that crosses the safety margin turns red,
+          Send goes dead, and the server refuses the job even over the API.</p>
+      </div>
+      <div class="card">
+        <h3>The datasheet, built in</h3>
+        <p>Epilog's published settings for a 30&nbsp;W tube ship as presets, per material.
+          Pick a thickness and the cuts that can't get through it are hidden.</p>
+      </div>
+      <div class="card">
+        <h3>Stays on your machine</h3>
+        <p>The server binds to localhost and the only outbound connection is to the
+          laser on your own network. No account, no upload, no cloud.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h2>From PDF to laser job</h2>
+    <p class="lede" style="margin-bottom:30px">
+      Poppler renders the page; the artwork becomes a 1-bit raster for engraving or
+      flattened vector paths for cutting; the driver assembles PJL/PCL and HP-GL and
+      streams it to the machine.
+    </p>
+<pre class="pipe">PDF ──pdftocairo──► preview + raster ──┬──► <span class="k">engrave</span>: 1-bit mask (PackBits)
+                                       └──► <span class="k">cut</span>: vector paths flattened to mm
+                                                      │
+                                                      ▼
+                                        PJL / PCL + HP-GL over LPD:515</pre>
+    <div class="grid3" style="margin-top:28px">
+      <div class="card">
+        <h3>Engrave</h3>
+        <p>The page is rasterised at the preset's DPI, cropped to the ink, and sent as a
+          PackBits-compressed bitmap.</p>
+      </div>
+      <div class="card">
+        <h3>Cut</h3>
+        <p>Vector paths are extracted and flattened to millimetres. Each cut gets a small
+          overcut, so the laser's start-of-vector firing lag doesn't leave the first edge
+          attached.</p>
+      </div>
+      <div class="card">
+        <h3>Both on one piece</h3>
+        <p>Send the engrave, switch the preset, send the cut. Both jobs are placed from
+          the same origin, so they line up on the material.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <p class="eyebrow">Get started</p>
+    <h2>Running in about five minutes</h2>
+    <ol class="steps" style="margin-top:28px">
+      <li>
+        <h3>Install Poppler</h3>
+        <p>It renders the PDF. This is the only dependency that isn't Python.</p>
+<pre><span class="c"># macOS</span>
+brew install poppler
+
+<span class="c"># Windows (then reopen the terminal)</span>
+winget install --id oschwartz10612.Poppler
+
+<span class="c"># Debian / Ubuntu</span>
+sudo apt install poppler-utils</pre>
+      </li>
+      <li>
+        <h3>Get Helix Studio</h3>
+<pre>git clone https://github.com/bsc2fast/helix-studio.git
+cd helix-studio
+python3 -m venv .venv &amp;&amp; source .venv/bin/activate
+python3 -m pip install -r requirements.txt</pre>
+      </li>
+      <li>
+        <h3>Point it at your machine</h3>
+        <p>Copy <code>config.example.json</code> to <code>config.json</code> and set your
+          laser's IP address and your own bed measurements. The shipped calibration
+          describes one specific machine — it is not yours.</p>
+      </li>
+      <li>
+        <h3>Run it</h3>
+<pre>python3 server.py      <span class="c"># then open http://localhost:4060</span></pre>
+      </li>
+    </ol>
+
+    <h3 style="margin-top:42px;font-size:17px">What you need</h3>
+    <table>
+      <tr><th>Requirement</th><th>Notes</th></tr>
+      <tr><td>Epilog Helix or Mini</td><td>On your network, reachable on TCP port 515. Its IP is on the machine's own control panel.</td></tr>
+      <tr><td>Python 3.9+</td><td>Plus Pillow, installed with pip.</td></tr>
+      <tr><td>Poppler</td><td>The <code>pdfinfo</code> and <code>pdftocairo</code> command-line tools.</td></tr>
+      <tr><td>A browser</td><td>Any modern one. The UI has no build step and no dependencies.</td></tr>
+    </table>
+
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/bsc2fast/helix-studio">Full instructions on GitHub</a>
+      <a class="btn" href="https://github.com/bsc2fast/helix-studio/releases">Releases</a>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="safety">
+      <h2>⚠ About running a laser</h2>
+      <p>A laser cutter is a fire hazard and a machine that can hurt you. Never run a job
+        unattended, keep the lid closed and extraction on.</p>
+      <p>The material presets are Epilog's published starting points for a 30&nbsp;W tube —
+        your machine's real power, optics and material differ, so test on scrap first. The
+        bed calibration that ships with the code belongs to one specific machine; measure
+        your own before the first send. The software refuses out-of-bounds jobs, but that
+        guard is only as good as the numbers you give it.</p>
+      <p>Helix Studio is provided as-is, with no warranty. You are responsible for what
+        your laser does.</p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Helix Studio — MIT licensed.</span>
+    <a href="https://github.com/bsc2fast/helix-studio">github.com/bsc2fast/helix-studio</a>
+    <span class="sp">Not affiliated with, or endorsed by, Epilog Laser.</span>
+  </div>
+</footer>
+
+</body>
+</html>
