@@ -20,7 +20,7 @@ ESC = b"\x1b"
 FOCUSWIDTH = 0.0252  # mm per focus unit (liblasercut)
 
 BED_W_MM = 609.6  # 24"
-BED_H_MM = 304.8  # 12"
+BED_H_MM = 457.2  # 18" (Helix 24x18)
 
 
 def mm2focus(mm):
