@@ -45,6 +45,24 @@ def load_machine():
         return json.load(f)
 
 
+def _rot_point(x, y, R, cw, ch):
+    """Rotate a point in a [0,cw]x[0,ch] box clockwise by R deg (0/90/180/270),
+    keeping it in the positive quadrant. Matches PIL rotate(-R, expand)."""
+    if R == 90:
+        return (ch - y, x)
+    if R == 180:
+        return (cw - x, ch - y)
+    if R == 270:
+        return (y, cw - x)
+    return (x, y)
+
+
+def _rot_image(img, R):
+    if R in (90, 180, 270):
+        return img.rotate(-R, expand=True)  # negative = clockwise; exact for 90s
+    return img
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         sys.stderr.write("[srv] " + (a[0] % a[1:]) + "\n")
@@ -159,38 +177,30 @@ class Handler(BaseHTTPRequestHandler):
         bx0, by0, bx1, by1 = bbox
         cw, ch = bx1 - bx0, by1 - by0
 
+        # rotation (clockwise degrees) swaps the placed dimensions for 90/270
+        R = int(req.get("rotation", 0)) % 360
+        if R not in (0, 90, 180, 270):
+            R = 0
+        rw, rh = (cw, ch) if R in (0, 180) else (ch, cw)
+
         # --- HARD bed-boundary guard (refuse jobs that would exceed the table) ---
         max_w = mc["usable_w_mm"] - mc["margin_mm"]
         max_h = mc["usable_h_mm"] - mc["margin_mm"]
         placement = {
-            "content_w_mm": round(cw, 2), "content_h_mm": round(ch, 2),
+            "content_w_mm": round(rw, 2), "content_h_mm": round(rh, 2),
             "x_mm": round(ox, 2), "y_mm": round(oy, 2),
-            "extent_x_mm": round(ox + cw, 2), "extent_y_mm": round(oy + ch, 2),
+            "extent_x_mm": round(ox + rw, 2), "extent_y_mm": round(oy + rh, 2),
             "limit_x_mm": round(max_w, 2), "limit_y_mm": round(max_h, 2),
+            "rotation": R,
         }
-        if ox < 0 or oy < 0 or ox + cw > max_w or oy + ch > max_h:
+        if ox < 0 or oy < 0 or ox + rw > max_w or oy + rh > max_h:
             return self._send_json({
                 "error": "OUT OF BOUNDS — job would exceed the bed and hit a wall. "
-                         "Reduce the artwork or offset. Content %.0f×%.0f mm at (%.0f,%.0f) "
-                         "reaches (%.0f,%.0f); usable limit is (%.0f,%.0f)."
-                         % (cw, ch, ox, oy, ox + cw, oy + ch, max_w, max_h),
+                         "Content %.0f×%.0f mm at (%.0f,%.0f) reaches (%.0f,%.0f); "
+                         "usable limit is (%.0f,%.0f)."
+                         % (rw, rh, ox, oy, ox + rw, oy + rh, max_w, max_h),
                 "placement": placement, "blocked": True,
             }, 400)
-
-        # --- frame test: trace the content bbox at low power to verify placement ---
-        if req.get("frame"):
-            fp = int(req.get("frame_power", 6))
-            fs = int(req.get("frame_speed", 40))
-            rect = epilog.rect_polyline(ox, oy, cw, ch)
-            part = epilog.VectorPart([rect], power=fp, speed=fs, frequency=500)
-            job = epilog.build_job([part], dpi=epilog.VECTOR_DPI, title="frame-test", overcut_mm=0)
-            if not dry_run:
-                epilog.send_lpd(host, job, jobname="900", title="frame-test",
-                                require_ack=not req.get("no_ack", False))
-            return self._send_json({
-                "jobs": [{"title": "frame-test", "bytes": len(job), "sent": not dry_run}],
-                "dry_run": dry_run, "host": host, "placement": placement, "frame": True,
-            })
 
         assignments = [a for a in req.get("assignments", []) if a.get("op") in ("engrave", "cut")]
         if not assignments:
@@ -206,10 +216,10 @@ class Handler(BaseHTTPRequestHandler):
                 dpi = int(a["dpi"])
                 rgb = pdfjob.render_rgb(s["pdf_path"], dpi=dpi, page=1)
                 mask = pdfjob.raster_from_colors(rgb, colors=[a["rgb"]] if a.get("rgb") else None)
-                # crop to global content bbox (px at this dpi) so it lands at the offset
+                # crop to global content bbox (px at this dpi), then rotate
                 cx0 = int(round(bx0 / 25.4 * dpi)); cy0 = int(round(by0 / 25.4 * dpi))
                 cx1 = int(round(bx1 / 25.4 * dpi)); cy1 = int(round(by1 / 25.4 * dpi))
-                mask = mask.crop((cx0, cy0, cx1, cy1))
+                mask = _rot_image(mask.crop((cx0, cy0, cx1, cy1)), R)
                 part = epilog.RasterPart(mask, power=a["power"], speed=a["speed"],
                                          dpi=dpi, x_mm=ox, y_mm=oy)
                 job = epilog.build_job([part], dpi=dpi, title=title, autofocus=autofocus)
@@ -220,8 +230,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not polylines:
                     jobs_summary.append({"title": title, "skipped": "no vector paths for %s" % a.get("hex")})
                     continue
-                # translate content bbox origin -> offset
-                polylines = [[(x - bx0 + ox, y - by0 + oy) for (x, y) in pl] for pl in polylines]
+                # base-local -> rotate -> place at offset
+                polylines = [[(lambda rx, ry: (rx + ox, ry + oy))(*_rot_point(x - bx0, y - by0, R, cw, ch))
+                              for (x, y) in pl] for pl in polylines]
                 part = epilog.VectorPart(polylines, power=a["power"], speed=a["speed"],
                                          frequency=a.get("freq", 500))
                 job = epilog.build_job([part], dpi=epilog.VECTOR_DPI, title=title, autofocus=autofocus)

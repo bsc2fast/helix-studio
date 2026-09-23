@@ -1,175 +1,222 @@
 // Helix Studio — front-end
 const $ = s => document.querySelector(s);
-const state = { materials: [], session: null, laserHost: "192.168.1.6", machine: null };
+const SVGNS = "http://www.w3.org/2000/svg";
+const state = {
+  materials: [], session: null, machine: null,
+  off: { x: 0, y: 0 }, rot: 0,
+};
 
+// ---------- theme ----------
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $("#themeBtn").textContent = t === "dark" ? "☀" : "☾";
+  try { localStorage.setItem("hs-theme", t); } catch (e) {}
+}
+$("#themeBtn").onclick = () =>
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+
+// ---------- boot ----------
 async function boot() {
+  try { applyTheme(localStorage.getItem("hs-theme") || "dark"); } catch (e) { applyTheme("dark"); }
   const cfg = await (await fetch("/api/config")).json();
-  state.laserHost = cfg.laser_host;
   state.machine = cfg.machine;
   $("#laserPill").innerHTML = "laser <b>" + cfg.laser_host + "</b>";
   $("#host").value = cfg.laser_host;
   const m = cfg.machine;
-  $("#bed").setAttribute("viewBox", `0 0 ${m.bed_w_mm} ${m.bed_h_mm}`);
+  const bed = $("#bed");
+  bed.setAttribute("viewBox", `0 0 ${m.bed_w_mm} ${m.bed_h_mm}`);
+  bed.style.aspectRatio = `${m.bed_w_mm} / ${m.bed_h_mm}`;
 
   const mat = await (await fetch("/api/materials")).json();
   state.materials = mat.materials;
   const sel = $("#material");
-  mat.materials.forEach(m => {
-    const o = document.createElement("option");
-    o.value = m.name; o.textContent = m.name;
-    sel.appendChild(o);
-  });
+  mat.materials.forEach(mm => sel.appendChild(new Option(mm.name, mm.name)));
 }
 
-// ---- upload ----
+// ---------- import ----------
 const drop = $("#drop"), fileInput = $("#file");
 drop.onclick = () => fileInput.click();
 fileInput.onchange = e => e.target.files[0] && importPdf(e.target.files[0]);
-["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => {
-  e.preventDefault(); drop.classList.add("hot");
-}));
-["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
-  e.preventDefault(); drop.classList.remove("hot");
-}));
+["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
 drop.addEventListener("drop", e => {
   const f = e.dataTransfer.files[0];
   if (f && f.type === "application/pdf") importPdf(f);
 });
 
 async function importPdf(file) {
-  drop.innerHTML = "<p class='muted'>importing " + file.name + "…</p>";
+  drop.innerHTML = "<p class='hint'>importing " + file.name + "…</p>";
   const buf = await file.arrayBuffer();
-  const res = await fetch("/api/import", {
-    method: "POST",
-    headers: { "Content-Type": "application/pdf" },
-    body: buf,
-  });
-  const data = await res.json();
+  const data = await (await fetch("/api/import", {
+    method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf,
+  })).json();
   if (data.error) { drop.innerHTML = "<p class='warn'>" + data.error + "</p>"; return; }
   state.session = data;
+  state.rot = 0;
   drop.style.display = "none";
   $("#stage").classList.add("on");
   $("#preview").src = data.preview + "?t=" + Date.now();
-  const info = data.info;
-  $("#pagePill").style.display = "";
-  $("#pagePill").textContent = `${info.width_mm} × ${info.height_mm} mm · ${info.pages} page(s)`;
-  $("#resetBtn").style.display = "";
+  $("#pagePill").hidden = false;
+  $("#pagePill").textContent = `${data.info.width_mm} × ${data.info.height_mm} mm`;
+  $("#resetBtn").hidden = false;
+  $("#bedSection").hidden = false;
+  $("#layersSection").hidden = !data.layers.length;
+  $("#sendSection").hidden = false;
+  buildBed();
+  centerArt();
   renderLayers();
-  $("#layersSection").style.display = data.layers.length ? "" : "none";
-  $("#placeSection").style.display = "";
-  $("#sendSection").style.display = "";
-  updateBed();
 }
-
 $("#resetBtn").onclick = () => location.reload();
 
-// ---- bed placement preview + bounds check ----
-function boundsCheck() {
-  const m = state.machine, c = state.session && state.session.content_mm;
-  if (!m || !c) return { ok: false };
-  const ox = +$("#offx").value, oy = +$("#offy").value;
-  const maxW = m.usable_w_mm - m.margin_mm, maxH = m.usable_h_mm - m.margin_mm;
-  const ok = ox >= 0 && oy >= 0 && ox + c.w_mm <= maxW && oy + c.h_mm <= maxH;
-  return { ok, ox, oy, cw: c.w_mm, ch: c.h_mm, maxW, maxH };
+// ---------- placement helpers ----------
+function artDims() {
+  const c = state.session && state.session.content_mm;
+  if (!c) return { w: 0, h: 0 };
+  return (state.rot % 180 === 0) ? { w: c.w_mm, h: c.h_mm } : { w: c.h_mm, h: c.w_mm };
+}
+function limits() {
+  const m = state.machine;
+  return { x: m.usable_w_mm - m.margin_mm, y: m.usable_h_mm - m.margin_mm };
+}
+function clampOff() {
+  const d = artDims(), L = limits();
+  state.off.x = Math.max(0, Math.min(state.off.x, L.x - d.w));
+  state.off.y = Math.max(0, Math.min(state.off.y, L.y - d.h));
+}
+function centerArt() {
+  const d = artDims(), m = state.machine;
+  state.off.x = Math.max(0, (m.usable_w_mm - d.w) / 2);
+  state.off.y = Math.max(0, (m.usable_h_mm - d.h) / 2);
+  updatePlacement();
 }
 
-function updateBed() {
-  const svg = $("#bed"), m = state.machine, c = state.session && state.session.content_mm;
-  if (!m) return;
-  const b = boundsCheck();
-  const art = c ? `<rect x="${b.ox}" y="${b.oy}" width="${c.w_mm}" height="${c.h_mm}"
-      fill="${b.ok ? 'rgba(123,216,143,.28)' : 'rgba(255,107,107,.30)'}"
-      stroke="${b.ok ? '#7bd88f' : '#ff6b6b'}" stroke-width="2"/>` : "";
-  svg.innerHTML = `
-    <rect x="0" y="0" width="${m.bed_w_mm}" height="${m.bed_h_mm}" fill="#111318" stroke="#333644" stroke-width="1"/>
-    <rect x="${m.margin_mm}" y="${m.margin_mm}"
-      width="${m.usable_w_mm - 2*m.margin_mm}" height="${m.usable_h_mm - 2*m.margin_mm}"
-      fill="none" stroke="#3a3f50" stroke-dasharray="6 5" stroke-width="1"/>
-    <circle cx="0" cy="0" r="6" fill="#6aa8ff"/>
-    ${art}`;
-  if (c) {
-    $("#placeInfo").textContent =
-      `Artwork ${c.w_mm.toFixed(0)}×${c.h_mm.toFixed(0)} mm · placed at (${b.ox},${b.oy}) · ` +
-      `reaches (${(b.ox + c.w_mm).toFixed(0)},${(b.oy + c.h_mm).toFixed(0)}) mm · ` +
-      `bed ${m.bed_w_mm}×${m.bed_h_mm}`;
-    const warn = $("#boundsWarn");
-    if (!b.ok) {
-      warn.style.display = "";
-      warn.textContent = "⚠ Out of bounds — would exceed the usable area (" +
-        b.maxW.toFixed(0) + "×" + b.maxH.toFixed(0) + " mm). Sending is disabled.";
-    } else warn.style.display = "none";
-  }
-  const bad = !b.ok;
-  $("#sendBtn").disabled = bad;
-  $("#frameBtn").disabled = bad;
+// ---------- bed (built once, updated in place) ----------
+let bedEls = null;
+function buildBed() {
+  const bed = $("#bed"), m = state.machine;
+  bed.innerHTML = "";
+  const mk = (tag, attrs) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+  bed.appendChild(mk("rect", { x: 0, y: 0, width: m.bed_w_mm, height: m.bed_h_mm, fill: "var(--bed)", stroke: "var(--line)", "stroke-width": 1 }));
+  bed.appendChild(mk("rect", {
+    x: m.margin_mm, y: m.margin_mm,
+    width: m.usable_w_mm - 2 * m.margin_mm, height: m.usable_h_mm - 2 * m.margin_mm,
+    fill: "none", stroke: "var(--bedline)", "stroke-dasharray": "7 5", "stroke-width": 1,
+  }));
+  bed.appendChild(mk("circle", { cx: 0, cy: 0, r: 7, fill: "var(--accent2)" }));
+  const art = mk("rect", { class: "art", rx: 2, "stroke-width": 2 });
+  bed.appendChild(art);
+  const lbl = mk("text", { "font-size": 22, "text-anchor": "middle", fill: "var(--ink)" });
+  bed.appendChild(lbl);
+  bedEls = { art, lbl };
+  attachDrag(art);
 }
 
-$("#offx").oninput = updateBed;
-$("#offy").oninput = updateBed;
+function attachDrag(art) {
+  let start = null;
+  art.addEventListener("pointerdown", e => {
+    const bed = $("#bed");
+    const r = bed.getBoundingClientRect();
+    const scale = state.machine.bed_w_mm / r.width;  // mm per px (uniform)
+    start = { px: e.clientX, py: e.clientY, ox: state.off.x, oy: state.off.y, scale };
+    art.classList.add("drag");
+    art.setPointerCapture(e.pointerId);
+  });
+  art.addEventListener("pointermove", e => {
+    if (!start) return;
+    state.off.x = start.ox + (e.clientX - start.px) * start.scale;
+    state.off.y = start.oy + (e.clientY - start.py) * start.scale;
+    clampOff();
+    updatePlacement();
+  });
+  const end = e => { start = null; art.classList.remove("drag"); };
+  art.addEventListener("pointerup", end);
+  art.addEventListener("pointercancel", end);
+}
 
-// ---- material change re-populates layer operation dropdowns ----
-$("#material").onchange = () => {
+function updatePlacement() {
+  if (!bedEls || !state.session) return;
+  clampOff();
+  const d = artDims(), L = limits();
+  const ok = state.off.x >= 0 && state.off.y >= 0 &&
+             state.off.x + d.w <= L.x + 0.01 && state.off.y + d.h <= L.y + 0.01;
+  const fill = ok ? "rgba(123,216,143,.30)" : "rgba(255,107,107,.32)";
+  const stroke = ok ? "var(--accent)" : "var(--danger)";
+  bedEls.art.setAttribute("x", state.off.x);
+  bedEls.art.setAttribute("y", state.off.y);
+  bedEls.art.setAttribute("width", Math.max(d.w, 0.1));
+  bedEls.art.setAttribute("height", Math.max(d.h, 0.1));
+  bedEls.art.setAttribute("fill", fill);
+  bedEls.art.setAttribute("stroke", stroke);
+  bedEls.lbl.setAttribute("x", state.off.x + d.w / 2);
+  bedEls.lbl.setAttribute("y", state.off.y + d.h / 2 + 7);
+  bedEls.lbl.textContent = `${d.w.toFixed(0)}×${d.h.toFixed(0)}`;
+  $("#offx").value = Math.round(state.off.x);
+  $("#offy").value = Math.round(state.off.y);
+  $("#rotLbl").textContent = state.rot + "°";
+  $("#placeInfo").textContent =
+    `Artwork ${d.w.toFixed(0)}×${d.h.toFixed(0)} mm at (${state.off.x.toFixed(0)}, ${state.off.y.toFixed(0)}) · ` +
+    `reaches (${(state.off.x + d.w).toFixed(0)}, ${(state.off.y + d.h).toFixed(0)}) · bed ${state.machine.bed_w_mm}×${state.machine.bed_h_mm}`;
+  const warn = $("#boundsWarn");
+  warn.hidden = ok;
+  if (!ok) warn.textContent = `⚠ Out of bounds — exceeds usable ${L.x.toFixed(0)}×${L.y.toFixed(0)} mm. Sending disabled.`;
+  $("#sendBtn").disabled = !ok;
+}
+
+$("#offx").oninput = e => { state.off.x = +e.target.value || 0; updatePlacement(); };
+$("#offy").oninput = e => { state.off.y = +e.target.value || 0; updatePlacement(); };
+$("#rotateBtn").onclick = () => { state.rot = (state.rot + 90) % 360; clampOff(); updatePlacement(); };
+$("#centerBtn").onclick = () => centerArt();
+
+// ---------- material + presets ----------
+function currentMaterial() { return state.materials.find(m => m.name === $("#material").value) || null; }
+$("#material").onchange = () => { renderPresets(); renderLayers(); };
+
+function renderPresets() {
+  const box = $("#presets"); box.innerHTML = "";
   const m = currentMaterial();
-  $("#matNotes").textContent = m && m.notes ? m.notes : "";
-  renderLayers();
-};
-
-function currentMaterial() {
-  return state.materials.find(m => m.name === $("#material").value) || null;
+  if (!m) return;
+  m.operations.forEach(op => {
+    const icon = op.type === "cut" ? "✂" : "▦";
+    const extra = op.type === "cut" ? ` · ${op.freq}Hz` : ` · ${op.dpi}dpi`;
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.innerHTML = `${icon} ${op.label} · <b>S${op.speed} P${op.power}</b>${extra}`;
+    box.appendChild(chip);
+  });
 }
 
+// ---------- layers ----------
 function renderLayers() {
-  const box = $("#layers");
-  box.innerHTML = "";
+  const box = $("#layers"); box.innerHTML = "";
   if (!state.session) return;
   const m = currentMaterial();
+  if (!m) { box.innerHTML = "<p class='hint'>Choose a material to assign settings.</p>"; return; }
   state.session.layers.forEach((L, i) => {
     const div = document.createElement("div");
-    div.className = "layer";
-    div.dataset.i = i;
+    div.className = "layer"; div.dataset.i = i;
+    div.innerHTML = `<div class="top"><div class="swatch" style="background:${L.hex}"></div>
+      <div style="flex:1"><div>${L.hex}</div><div class="cov">${(L.coverage*100).toFixed(1)}% of art</div></div></div>`;
 
-    const top = document.createElement("div");
-    top.className = "top";
-    const sw = document.createElement("div");
-    sw.className = "swatch"; sw.style.background = L.hex;
-    const name = document.createElement("div");
-    name.style.flex = "1";
-    name.innerHTML = `<div>${L.hex}</div><div class="cov">${(L.coverage*100).toFixed(1)}% of art</div>`;
-    top.appendChild(sw); top.appendChild(name);
-    div.appendChild(top);
-
-    // operation dropdown
     const opSel = document.createElement("select");
     opSel.className = "opsel";
-    const ignore = new Option("Ignore this colour", "ignore");
-    opSel.appendChild(ignore);
-    if (m) {
-      m.operations.forEach((op, oi) => {
-        const label = `${op.type === "cut" ? "✂ Cut" : "▦ Engrave"} — ${op.label}`;
-        opSel.appendChild(new Option(label, oi));
-      });
-    }
+    opSel.appendChild(new Option("Ignore this colour", "ignore"));
+    m.operations.forEach((op, oi) =>
+      opSel.appendChild(new Option(`${op.type === "cut" ? "✂ Cut" : "▦ Engrave"} — ${op.label}`, oi)));
     div.appendChild(opSel);
 
     const grid = document.createElement("div");
     grid.className = "grid4";
     grid.innerHTML = `
-      <div><label class="f">Speed %</label><input type="number" class="sp" min="1" max="100"></div>
-      <div><label class="f">Power %</label><input type="number" class="pw" min="1" max="100"></div>
-      <div class="dpiWrap"><label class="f">DPI</label><input type="number" class="dpi"></div>
-      <div class="freqWrap"><label class="f">Freq Hz</label><input type="number" class="freq"></div>`;
+      <div><label class="fld-l">Speed %</label><input type="number" class="sp" min="1" max="100"></div>
+      <div><label class="fld-l">Power %</label><input type="number" class="pw" min="1" max="100"></div>
+      <div class="dpiWrap"><label class="fld-l">DPI</label><input type="number" class="dpi"></div>
+      <div class="freqWrap"><label class="fld-l">Freq Hz</label><input type="number" class="freq"></div>`;
     div.appendChild(grid);
 
-    function applyOp() {
-      const val = opSel.value;
-      if (val === "ignore" || !m) {
-        div.classList.add("ignored");
-        grid.style.display = "none";
-        return;
-      }
-      div.classList.remove("ignored");
-      grid.style.display = "";
-      const op = m.operations[parseInt(val, 10)];
+    function apply() {
+      if (opSel.value === "ignore") { div.classList.add("ignored"); grid.style.display = "none"; return; }
+      div.classList.remove("ignored"); grid.style.display = "";
+      const op = m.operations[+opSel.value];
       grid.querySelector(".sp").value = op.speed;
       grid.querySelector(".pw").value = op.power;
       grid.querySelector(".dpiWrap").style.display = op.type === "engrave" ? "" : "none";
@@ -177,22 +224,15 @@ function renderLayers() {
       grid.querySelector(".dpi").value = op.dpi || "";
       grid.querySelector(".freq").value = op.freq || "";
     }
-    opSel.onchange = applyOp;
-    // default: pick first engrave op if present, else ignore
-    if (m) {
-      const firstEng = m.operations.findIndex(o => o.type === "engrave");
-      opSel.value = firstEng >= 0 ? String(firstEng) : "ignore";
-    } else {
-      opSel.value = "ignore";
-    }
-    applyOp();
+    opSel.onchange = apply;
+    const firstEng = m.operations.findIndex(o => o.type === "engrave");
+    opSel.value = firstEng >= 0 ? String(firstEng) : "ignore";
+    apply();
     box.appendChild(div);
   });
-  if (!m) $("#layers").insertAdjacentHTML("afterbegin",
-    "<p class='muted' style='font-size:12px'>Choose a material to assign settings.</p>");
 }
 
-// ---- send ----
+// ---------- send ----------
 $("#sendBtn").onclick = async () => {
   const m = currentMaterial();
   if (!m) { alert("Choose a material first."); return; }
@@ -200,74 +240,37 @@ $("#sendBtn").onclick = async () => {
   document.querySelectorAll(".layer").forEach(div => {
     const opSel = div.querySelector(".opsel");
     if (!opSel || opSel.value === "ignore") return;
-    const op = m.operations[parseInt(opSel.value, 10)];
-    const L = state.session.layers[parseInt(div.dataset.i, 10)];
+    const op = m.operations[+opSel.value];
+    const L = state.session.layers[+div.dataset.i];
     assignments.push({
-      hex: L.hex, rgb: L.rgb, op: op.type,
-      label: op.label,
-      speed: +div.querySelector(".sp").value,
-      power: +div.querySelector(".pw").value,
+      hex: L.hex, rgb: L.rgb, op: op.type, label: op.label,
+      speed: +div.querySelector(".sp").value, power: +div.querySelector(".pw").value,
       dpi: +div.querySelector(".dpi").value || undefined,
       freq: +div.querySelector(".freq").value || undefined,
     });
   });
   if (!assignments.length) { alert("Assign at least one colour to cut or engrave."); return; }
 
-  const dry = $("#dryrun").checked;
-  const btn = $("#sendBtn");
-  btn.disabled = true; btn.textContent = dry ? "Building…" : "Sending…";
+  const btn = $("#sendBtn"); btn.disabled = true; btn.textContent = "Sending…";
   const out = $("#out"); out.classList.add("on"); out.textContent = "working…";
   try {
-    const res = await fetch("/api/send", {
+    const data = await (await fetch("/api/send", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id: state.session.id, host: $("#host").value,
-        material: m.name, assignments,
-        offset_mm: [+$("#offx").value, +$("#offy").value],
-        autofocus: $("#autofocus").checked, dry_run: dry,
+        id: state.session.id, host: $("#host").value, material: m.name,
+        assignments, offset_mm: [state.off.x, state.off.y], rotation: state.rot,
+        autofocus: $("#autofocus").checked,
       }),
-    });
-    const data = await res.json();
-    if (data.error) { out.textContent = "ERROR: " + data.error; }
-    else {
-      const lines = data.jobs.map(j =>
-        j.skipped ? `· ${j.title}: SKIPPED (${j.skipped})`
-        : `· ${j.title}: ${j.bytes} bytes ${j.sent ? "→ SENT" : "(dry-run)"}`);
-      out.textContent = (dry ? "DRY-RUN — nothing sent\n" : "Sent to " + data.host +
-        " — press GO on the machine per job\n") + lines.join("\n");
-    }
-  } catch (e) {
-    out.textContent = "ERROR: " + e.message;
-  }
-  btn.disabled = false; btn.textContent = dry ? "Build jobs" : "Send to laser";
-};
-
-$("#dryrun").onchange = e => {
-  $("#sendBtn").textContent = e.target.checked ? "Build jobs" : "Send to laser";
-};
-
-// ---- frame test ----
-$("#frameBtn").onclick = async () => {
-  if (!state.session) return;
-  const dry = $("#dryrun").checked;
-  const out = $("#out"); out.classList.add("on"); out.textContent = "framing…";
-  const btn = $("#frameBtn"); btn.disabled = true;
-  try {
-    const res = await fetch("/api/send", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: state.session.id, host: $("#host").value, frame: true,
-        offset_mm: [+$("#offx").value, +$("#offy").value], dry_run: dry,
-      }),
-    });
-    const data = await res.json();
+    })).json();
     if (data.error) out.textContent = "ERROR: " + data.error;
-    else out.textContent = (dry ? "DRY-RUN frame (not sent)\n" :
-      "Frame sent — press GO; the head traces the artwork outline at low power.\n") +
-      `outline ${data.placement.content_w_mm}×${data.placement.content_h_mm} mm at ` +
-      `(${data.placement.x_mm},${data.placement.y_mm})`;
+    else {
+      const lines = data.jobs.map(j => j.skipped
+        ? `· ${j.title}: SKIPPED (${j.skipped})`
+        : `· ${j.title}: ${j.bytes} bytes → SENT`);
+      out.textContent = "Sent to " + data.host + " — press GO on the machine per job\n" + lines.join("\n");
+    }
   } catch (e) { out.textContent = "ERROR: " + e.message; }
-  btn.disabled = false;
+  btn.disabled = false; btn.textContent = "Send to laser";
 };
 
 boot();
