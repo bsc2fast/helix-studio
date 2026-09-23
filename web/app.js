@@ -78,7 +78,6 @@ async function importPdf(file) {
   state.page = { w: data.info.width_mm, h: data.info.height_mm };
   $("#drop").hidden = true;
   $("#controls").hidden = false;
-  $("#resetBtn").hidden = false;
   // SVG elements have no .hidden IDL property — toggle the attribute instead
   if (bedEls) {
     bedEls.artimg.setAttribute("href", data.preview + "?t=" + Date.now());
@@ -107,7 +106,7 @@ function artTransform(R, ox, oy, x0, y0, cw, ch) {
   if (R === 270) return `translate(${ox} ${oy}) translate(0 ${cw}) rotate(270) translate(${-x0} ${-y0})`;
   return `translate(${ox - x0} ${oy - y0})`;
 }
-$("#resetBtn").onclick = () => location.reload();
+$("#brand").onclick = () => location.reload();
 
 // ---------- placement helpers ----------
 function artDims() {

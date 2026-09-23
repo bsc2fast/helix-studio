@@ -8,12 +8,14 @@
   :root{
     --bg:#14151a; --panel:#1d1f27; --panel2:#262933; --line:#333644;
     --ink:#e8e9ee; --muted:#9297a8; --accent:#7bd88f; --accent2:#6aa8ff;
-    --danger:#ff6b6b; --bed:#0c0d11; --bedline:#3a3f50; --shadow:0 10px 34px rgba(0,0,0,.45);
+    --danger:#ff6b6b; --warn:#ffb454; --bed:#0c0d11; --bedline:#3a3f50;
+    --bar:#0f1420; --barline:#2a3040; --shadow:0 10px 34px rgba(0,0,0,.45);
   }
   html[data-theme="light"]{
     --bg:#eef1f5; --panel:#ffffff; --panel2:#eceff4; --line:#d6dae2;
     --ink:#1a1c22; --muted:#5b6274; --accent:#1f9d4d; --accent2:#2f6fed;
-    --danger:#d23b3b; --bed:#dfe3ea; --bedline:#b0b8c6; --shadow:0 10px 30px rgba(20,30,60,.16);
+    --danger:#d23b3b; --warn:#c77d15; --bed:#dfe3ea; --bedline:#b0b8c6;
+    --bar:#e7edf9; --barline:#cdd6e6; --shadow:0 10px 30px rgba(20,30,60,.16);
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
@@ -23,20 +25,22 @@
     display:flex;flex-direction:column;overflow:hidden}
 
   /* ---- app bar ---- */
-  header{display:flex;align-items:center;gap:12px;padding:9px 16px;
-    background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;z-index:3}
-  .brand{font-size:15px;font-weight:600;letter-spacing:.3px;white-space:nowrap}
-  .brand span{color:var(--muted);font-weight:400}
+  header{display:flex;align-items:center;gap:9px;padding:8px 14px;
+    background:var(--bar);border-bottom:1px solid var(--barline);flex-wrap:nowrap;
+    overflow:hidden;z-index:3}
+  .brand{font-size:15px;font-weight:600;letter-spacing:.3px;white-space:nowrap;
+    cursor:pointer;flex-shrink:0}
   .pill{font-size:12px;color:var(--muted);background:var(--panel2);
-    border:1px solid var(--line);border-radius:20px;padding:4px 11px;white-space:nowrap}
+    border:1px solid var(--line);border-radius:20px;padding:4px 11px;white-space:nowrap;flex-shrink:0}
   .pill b{color:var(--accent)}
-  .spacer{flex:1}
-  .presets{display:flex;gap:6px;flex-wrap:wrap;max-width:34vw}
-  .chip{font-size:11px;color:var(--muted);background:var(--panel2);
-    border:1px solid var(--line);border-radius:6px;padding:3px 8px;white-space:nowrap}
-  .chip b{color:var(--ink);font-weight:600}
-  select,input[type=number],input[type=text]{background:var(--panel2);color:var(--ink);
-    border:1px solid var(--line);border-radius:7px;padding:6px 9px;font:inherit}
+  .spacer{flex:1;min-width:8px}
+  header select,input[type=number],input[type=text]{background:var(--panel2);color:var(--ink);
+    border:1px solid var(--line);border-radius:7px;padding:6px 9px;font:inherit;flex-shrink:0}
+  header select{font-size:13px}
+  #machine{max-width:164px}
+  #material{max-width:126px}
+  #thickness{width:104px}
+  #preset{max-width:172px}
   input[type=number]{width:78px}
   .icon{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);
     background:var(--panel2);color:var(--ink);cursor:pointer;font-size:16px;line-height:1;
@@ -99,7 +103,7 @@
 </head>
 <body>
 <header>
-  <div class="brand">Helix Studio</div>
+  <div class="brand" id="brand" title="Start over (load a new PDF)">Helix Studio</div>
   <span class="pill" id="laserPill">laser —</span>
   <select id="machine" title="Machine model"></select>
   <select id="material"><option value="">— material —</option></select>
@@ -119,7 +123,6 @@
   <button class="send" id="sendBtn" disabled>Send</button>
   <div class="spacer"></div>
   <button class="icon" id="themeBtn" title="Toggle light / dark">☀</button>
-  <a class="reset" id="resetBtn" hidden>start over</a>
 </header>
 
 <main>
