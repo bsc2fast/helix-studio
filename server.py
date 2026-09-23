@@ -5,9 +5,15 @@ sends them to the Epilog Helix.
 
   GET  /                     -> web UI
   GET  /api/materials        -> materials.json (Epilog 30W suggested settings)
-  POST /api/import           -> body = raw PDF bytes; returns preview + layers
-  GET  /preview/<id>.png     -> rendered preview
-  POST /api/send             -> JSON assignments; builds & sends jobs (or dry-run)
+  POST /api/import           -> body = raw PDF bytes; returns page count + page 1
+  GET  /api/page/<id>/<n>    -> page n: preview url, content bbox, cut-line vectors
+  GET  /preview/<id>/<n>.png -> page n rendered (/preview/<id>.png = page 1)
+  GET  /thumb/<id>/<n>.png   -> small render of page n for the page rail
+  POST /api/send             -> one operation over the placed pages ("items"),
+                                or per-colour assignments; builds & sends (or dry-run)
+  GET  /api/laser/status     -> {host, online, busy}: is the laser's LPD port up?
+  POST /api/laser/scan       -> sweep the local /24s for LPD hosts; adopts the
+                                laser when exactly one answers (or body {host})
 
 Bound to 127.0.0.1 by default. Depends on: Poppler CLI + Pillow + driver/*.
 """
@@ -17,24 +23,34 @@ import json
 import os
 import shutil
 import sys
+import threading
+import re
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
+
+from PIL import Image, ImageChops
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "driver"))
 import epilog          # noqa: E402
 import pdfjob          # noqa: E402
+import laserlink       # noqa: E402
 
 DEFAULT_PORT = 4060
 DEFAULT_BIND = "127.0.0.1"
 DEFAULT_LASER_HOST = "192.168.1.6"
 PREVIEW_DPI = 120
+THUMB_DPI = 36
+THUMB_PX = 260   # longest side of a page-rail thumbnail
 MAX_UPLOAD = 64 * 1024 * 1024
 
 CFG = {}        # filled by load_config() before the server starts
 
-SESSIONS = {}   # id -> {pdf_path, preview_png, info}
+SESSIONS = {}   # id -> {pdf_path, info, pages: {n: page geometry}, thumbs: {n: png}}
+# held for the length of an LPD send: the laser takes one connection at a time,
+# so the status probe must not knock on port 515 mid-job
+SENDING = threading.Lock()
 TMPDIR = os.path.join(HERE, ".sessions")
 os.makedirs(TMPDIR, exist_ok=True)
 
@@ -125,6 +141,73 @@ def _rot_image(img, R):
     return img
 
 
+def _simplify(polylines):
+    """Round to 0.1 mm and drop sub-0.3 mm steps — enough for the on-screen
+    cut-line overlay, and a fraction of the JSON."""
+    out = []
+    for pl in polylines:
+        simp = []
+        for (x, y) in pl:
+            p = [round(x, 1), round(y, 1)]
+            if not simp or abs(p[0] - simp[-1][0]) + abs(p[1] - simp[-1][1]) > 0.3:
+                simp.append(p)
+        if len(simp) >= 2:
+            out.append(simp)
+    return out
+
+
+def load_page(s, n):
+    """Geometry of page n at PREVIEW_DPI, computed once per session and cached:
+    the preview PNG, the ink bbox (mm) and the simplified vectors."""
+    n = int(n)
+    if not 1 <= n <= s["info"]["pages"]:
+        raise ValueError("the PDF has no page %d" % n)
+    pg = s["pages"].get(n)
+    if pg:
+        return pg
+    rgb = pdfjob.render_rgb(s["pdf_path"], dpi=PREVIEW_DPI, page=n)
+    buf = BytesIO()
+    rgb.save(buf, "PNG")
+    try:
+        allv = [pl for pls in pdfjob.extract_vectors(s["pdf_path"], page=n).values() for pl in pls]
+    except Exception:
+        allv = []
+    # the box every check works from must hold the ink AND every vector: a cut
+    # path the render doesn't show (clipped away, or hairline) still gets cut,
+    # so it must still be inside the bounds / overlap checks
+    bbox = pdfjob.content_bbox_mm(rgb, PREVIEW_DPI)
+    pts = [p for pl in allv for p in pl]
+    if pts:
+        vb = (min(x for x, _ in pts), min(y for _, y in pts), max(x for x, _ in pts), max(y for _, y in pts))
+        bbox = vb if not bbox else (min(bbox[0], vb[0]), min(bbox[1], vb[1]),
+                                    max(bbox[2], vb[2]), max(bbox[3], vb[3]))
+    pg = {"rgb": rgb, "preview_png": buf.getvalue(),
+          "bbox": bbox, "vectors": _simplify(allv),
+          "size_mm": (rgb.size[0] / PREVIEW_DPI * 25.4, rgb.size[1] / PREVIEW_DPI * 25.4)}
+    s["pages"][n] = pg
+    return pg
+
+
+def page_json(sid, n, pg):
+    b = pg["bbox"]
+    return {
+        "page": n,
+        "width_mm": round(pg["size_mm"][0], 2), "height_mm": round(pg["size_mm"][1], 2),
+        "preview": "/preview/%s/%d.png" % (sid, n),
+        "content_mm": {
+            "x0_mm": round(b[0], 2), "y0_mm": round(b[1], 2),
+            "w_mm": round(b[2] - b[0], 2), "h_mm": round(b[3] - b[1], 2),
+        } if b else None,
+        "vectors": pg["vectors"],
+    }
+
+
+def _overlap(a, b):
+    """Placed rects (x, y, w, h) overlap by more than a hair (touching is fine)."""
+    return (min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0]) > 0.01 and
+            min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1]) > 0.01)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         sys.stderr.write("[srv] " + (a[0] % a[1:]) + "\n")
@@ -143,6 +226,13 @@ class Handler(BaseHTTPRequestHandler):
             body = f.read()
         self.send_response(200)
         self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_png(self, body):
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -166,17 +256,38 @@ class Handler(BaseHTTPRequestHandler):
             mc = CFG["machine"]
             return self._send_json({"laser_host": CFG["laser_host"], "machine": mc,
                                     "machines": [mc]})
-        if path.startswith("/preview/"):
-            sid = path[len("/preview/"):].rsplit(".", 1)[0]
+        if path == "/api/laser/status":
+            host = CFG["laser_host"]
+            if SENDING.locked():
+                return self._send_json({"host": host, "online": True, "busy": True})
+            return self._send_json({"host": host, "online": laserlink.probe(host), "busy": False})
+        m = re.fullmatch(r"/(api/page|preview|thumb)/(\w+)(?:/(\d+))?(\.png)?", path)
+        if m:
+            kind, sid, n = m.group(1), m.group(2), int(m.group(3) or 1)
             s = SESSIONS.get(sid)
             if not s:
                 return self._send_json({"error": "unknown session"}, 404)
-            self.send_response(200)
-            self.send_header("Content-Type", "image/png")
-            self.send_header("Content-Length", str(len(s["preview_png"])))
-            self.end_headers()
-            return self.wfile.write(s["preview_png"])
+            try:
+                if kind == "api/page":
+                    return self._send_json(page_json(sid, n, load_page(s, n)))
+                if kind == "preview":
+                    return self._send_png(load_page(s, n)["preview_png"])
+                return self._send_png(self._thumb(s, n))
+            except ValueError as e:
+                return self._send_json({"error": str(e)}, 404)
         return self._send_json({"error": "not found"}, 404)
+
+    def _thumb(self, s, n):
+        if not 1 <= n <= s["info"]["pages"]:
+            raise ValueError("the PDF has no page %d" % n)
+        png = s["thumbs"].get(n)
+        if png is None:
+            img = pdfjob.render_rgb(s["pdf_path"], dpi=THUMB_DPI, page=n)
+            img.thumbnail((THUMB_PX, THUMB_PX))
+            buf = BytesIO()
+            img.save(buf, "PNG")
+            png = s["thumbs"][n] = buf.getvalue()
+        return png
 
     def do_POST(self):
         try:
@@ -184,6 +295,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.handle_import()
             if self.path == "/api/send":
                 return self.handle_send()
+            if self.path == "/api/laser/scan":
+                return self.handle_scan()
             return self._send_json({"error": "not found"}, 404)
         except Exception as e:
             import traceback
@@ -199,41 +312,31 @@ class Handler(BaseHTTPRequestHandler):
         with open(pdf_path, "wb") as f:
             f.write(data)
         info = pdfjob.pdf_info(pdf_path)
-        rgb = pdfjob.render_rgb(pdf_path, dpi=PREVIEW_DPI, page=1)
-        buf = BytesIO()
-        rgb.save(buf, "PNG")
-        layers = pdfjob.detect_layers(rgb)
-        # extracted vector geometry (page-mm), simplified, for the cut-line overlay
-        vectors = []
-        try:
-            for pls in pdfjob.extract_vectors(pdf_path, page=1).values():
-                for pl in pls:
-                    simp = []
-                    for (x, y) in pl:
-                        p = [round(x, 1), round(y, 1)]
-                        if not simp or abs(p[0] - simp[-1][0]) + abs(p[1] - simp[-1][1]) > 0.3:
-                            simp.append(p)
-                    if len(simp) >= 2:
-                        vectors.append(simp)
-        except Exception:
-            vectors = []
-        bbox = pdfjob.content_bbox_mm(rgb, PREVIEW_DPI)
-        content = None
-        if bbox:
-            content = {
-                "x0_mm": round(bbox[0], 2), "y0_mm": round(bbox[1], 2),
-                "w_mm": round(bbox[2] - bbox[0], 2), "h_mm": round(bbox[3] - bbox[1], 2),
-            }
-        SESSIONS[sid] = {"pdf_path": pdf_path, "preview_png": buf.getvalue(), "info": info}
-        return self._send_json({
-            "id": sid,
-            "info": info,
-            "preview": "/preview/%s.png" % sid,
-            "preview_px": rgb.size,
-            "layers": layers,
-            "content_mm": content,
-            "vectors": vectors,
-        })
+        s = SESSIONS[sid] = {"pdf_path": pdf_path, "info": info, "pages": {}, "thumbs": {}}
+        pg = load_page(s, 1)
+        # page 1 flattened into the top level (the original single-page shape),
+        # plus "pages" so the UI knows to show the page rail
+        out = page_json(sid, 1, pg)
+        out.update({"id": sid, "info": info, "pages": info["pages"],
+                    "preview_px": pg["rgb"].size, "layers": pdfjob.detect_layers(pg["rgb"])})
+        return self._send_json(out)
+
+    def handle_scan(self):
+        """Body {} sweeps the network; body {"host": ip} adopts that host (the
+        user's pick when the sweep found more than one LPD device). The adopted
+        host lasts until the server restarts — config.json is left alone."""
+        req = json.loads(self._read_body().decode() or "{}")
+        if req.get("host"):
+            CFG["laser_host"] = req["host"]
+            return self._send_json({"host": CFG["laser_host"], "online": laserlink.probe(req["host"])})
+        res = laserlink.scan(extra_hosts=[CFG["laser_host"]])
+        found = res["found"]
+        if CFG["laser_host"] in found or len(found) == 1:
+            # the configured laser came back, or exactly one LPD device is on the LAN
+            if CFG["laser_host"] not in found:
+                CFG["laser_host"] = found[0]
+            return self._send_json(dict(res, host=CFG["laser_host"], online=True))
+        return self._send_json(dict(res, host=CFG["laser_host"], online=False))
 
     def handle_send(self):
         req = json.loads(self._read_body().decode())
@@ -242,80 +345,128 @@ class Handler(BaseHTTPRequestHandler):
         if not s:
             return self._send_json({"error": "unknown session"}, 404)
         host = req.get("host", CFG["laser_host"])
-        offset = req.get("offset_mm", [0, 0])
-        ox, oy = float(offset[0]), float(offset[1])
         autofocus = bool(req.get("autofocus", False))
         dry_run = bool(req.get("dry_run", False))
         mc = CFG["machine"]
-
-        # --- global content bbox (mm) so all layers crop/translate consistently ---
-        bbox_rgb = pdfjob.render_rgb(s["pdf_path"], dpi=PREVIEW_DPI, page=1)
-        bbox = pdfjob.content_bbox_mm(bbox_rgb, PREVIEW_DPI)
-        if not bbox:
-            return self._send_json({"error": "the PDF appears blank"}, 400)
-        bx0, by0, bx1, by1 = bbox
-        cw, ch = bx1 - bx0, by1 - by0
-
-        # rotation (clockwise degrees) swaps the placed dimensions for 90/270
-        R = int(req.get("rotation", 0)) % 360
-        if R not in (0, 90, 180, 270):
-            R = 0
-        rw, rh = (cw, ch) if R in (0, 180) else (ch, cw)
-
-        # --- HARD safety-boundary guard (keep the head off the rails) ---
         safety = mc.get("safety_mm", mc.get("margin_mm", 3))
         min_x = min_y = safety
         max_x = min(mc["usable_w_mm"], mc["bed_w_mm"] - safety)
         max_y = min(mc["usable_h_mm"], mc["bed_h_mm"] - safety)
-        placement = {
-            "content_w_mm": round(rw, 2), "content_h_mm": round(rh, 2),
-            "x_mm": round(ox, 2), "y_mm": round(oy, 2),
-            "extent_x_mm": round(ox + rw, 2), "extent_y_mm": round(oy + rh, 2),
+
+        # "items" places several pages on one bed; the older single-page shape
+        # (offset_mm + rotation, page 1) is one item
+        items = req.get("items") or [{"page": 1, "offset_mm": req.get("offset_mm", [0, 0]),
+                                      "rotation": req.get("rotation", 0)}]
+        placed = []
+        for it in items:
+            n = int(it.get("page", 1))
+            bbox = load_page(s, n)["bbox"]
+            if not bbox:
+                return self._send_json({"error": "page %d appears blank" % n}, 400)
+            bx0, by0, bx1, by1 = bbox
+            cw, ch = bx1 - bx0, by1 - by0
+            # rotation (clockwise degrees) swaps the placed dimensions for 90/270
+            R = int(it.get("rotation", 0)) % 360
+            if R not in (0, 90, 180, 270):
+                R = 0
+            rw, rh = (cw, ch) if R in (0, 180) else (ch, cw)
+            ox, oy = float(it["offset_mm"][0]), float(it["offset_mm"][1])
+            placed.append({"page": n, "bbox": bbox, "cw": cw, "ch": ch, "R": R,
+                           "ox": ox, "oy": oy, "rw": rw, "rh": rh})
+
+        placements = [{
+            "page": p["page"],
+            "content_w_mm": round(p["rw"], 2), "content_h_mm": round(p["rh"], 2),
+            "x_mm": round(p["ox"], 2), "y_mm": round(p["oy"], 2),
+            "extent_x_mm": round(p["ox"] + p["rw"], 2), "extent_y_mm": round(p["oy"] + p["rh"], 2),
             "min_x_mm": round(min_x, 2), "min_y_mm": round(min_y, 2),
             "limit_x_mm": round(max_x, 2), "limit_y_mm": round(max_y, 2),
-            "rotation": R,
-        }
-        if ox < min_x - 0.01 or oy < min_y - 0.01 or ox + rw > max_x + 0.01 or oy + rh > max_y + 0.01:
-            return self._send_json({
-                "error": "OUT OF BOUNDS — inside the %g mm safety margin. "
-                         "Content %.0f×%.0f mm at (%.0f,%.0f) reaches (%.0f,%.0f); "
-                         "allowed area is (%.0f,%.0f)–(%.0f,%.0f)."
-                         % (safety, rw, rh, ox, oy, ox + rw, oy + rh, min_x, min_y, max_x, max_y),
-                "placement": placement, "blocked": True,
-            }, 400)
+            "rotation": p["R"],
+        } for p in placed]
+        placement = placements[0] if len(placements) == 1 else placements
 
-        # ---- single-operation send: one preset applied to the whole artwork ----
+        # --- HARD safety-boundary guard (keep the head off the rails) ---
+        for p in placed:
+            ox, oy, rw, rh = p["ox"], p["oy"], p["rw"], p["rh"]
+            if ox < min_x - 0.01 or oy < min_y - 0.01 or ox + rw > max_x + 0.01 or oy + rh > max_y + 0.01:
+                return self._send_json({
+                    "error": "OUT OF BOUNDS — %sinside the %g mm safety margin. "
+                             "Content %.0f×%.0f mm at (%.0f,%.0f) reaches (%.0f,%.0f); "
+                             "allowed area is (%.0f,%.0f)–(%.0f,%.0f)."
+                             % ("page %d is " % p["page"] if len(placed) > 1 else "",
+                                safety, rw, rh, ox, oy, ox + rw, oy + rh, min_x, min_y, max_x, max_y),
+                    "placement": placement, "blocked": True,
+                }, 400)
+        # --- pages must not overlap: the laser would burn/cut the shared area twice ---
+        for i, a in enumerate(placed):
+            for b in placed[i + 1:]:
+                if _overlap((a["ox"], a["oy"], a["rw"], a["rh"]), (b["ox"], b["oy"], b["rw"], b["rh"])):
+                    return self._send_json({
+                        "error": "OVERLAP — page %d and page %d overlap on the bed; move them apart."
+                                 % (a["page"], b["page"]),
+                        "placement": placement, "blocked": True,
+                    }, 400)
+
+        # ---- single-operation send: one preset applied to every placed page ----
         op = req.get("operation")
         if op and op.get("type") in ("engrave", "cut"):
             title = op["type"]
             if op["type"] == "engrave":
                 dpi = int(op["dpi"])
-                rgb = pdfjob.render_rgb(s["pdf_path"], dpi=dpi, page=1)
-                mask = pdfjob.raster_from_colors(rgb, colors=None)  # all ink
-                cx0 = int(round(bx0 / 25.4 * dpi)); cy0 = int(round(by0 / 25.4 * dpi))
-                cx1 = int(round(bx1 / 25.4 * dpi)); cy1 = int(round(by1 / 25.4 * dpi))
-                mask = _rot_image(mask.crop((cx0, cy0, cx1, cy1)), R)
-                part = epilog.RasterPart(mask, power=op["power"], speed=op["speed"],
-                                         dpi=dpi, x_mm=ox, y_mm=oy)
+                # each page: render at the job dpi, crop to its ink bbox, rotate;
+                # then paste them all into ONE raster spanning every page. Rows are
+                # positioned absolutely and blank ones are skipped, so the gaps
+                # between pages cost nothing and it stays a single raster part.
+                masks, renders = [], {}
+                for p in placed:
+                    if p["page"] not in renders:
+                        rgb = pdfjob.render_rgb(s["pdf_path"], dpi=dpi, page=p["page"])
+                        renders[p["page"]] = pdfjob.raster_from_colors(rgb, colors=None)  # all ink
+                    bx0, by0, bx1, by1 = p["bbox"]
+                    cx0 = int(round(bx0 / 25.4 * dpi)); cy0 = int(round(by0 / 25.4 * dpi))
+                    cx1 = int(round(bx1 / 25.4 * dpi)); cy1 = int(round(by1 / 25.4 * dpi))
+                    masks.append((p, _rot_image(renders[p["page"]].crop((cx0, cy0, cx1, cy1)), p["R"])))
+                ux = min(p["ox"] for p in placed)
+                uy = min(p["oy"] for p in placed)
+                # offsets via the driver's own mm->units rounding, so every page lands on
+                # exactly the pixel it would if it were sent on its own
+                U = lambda mm: epilog.mm2units(mm, dpi)
+                spots = [(U(p["ox"]) - U(ux), U(p["oy"]) - U(uy), m) for p, m in masks]
+                sheet = Image.new("L", (max(x + m.size[0] for x, _, m in spots),
+                                        max(y + m.size[1] for _, y, m in spots)), 255)
+                for x, y, m in spots:
+                    box = (x, y, x + m.size[0], y + m.size[1])
+                    sheet.paste(ImageChops.darker(sheet.crop(box), m), box)
+                part = epilog.RasterPart(sheet, power=op["power"], speed=op["speed"],
+                                         dpi=dpi, x_mm=ux, y_mm=uy)
                 job = epilog.build_job([part], dpi=dpi, title=title, autofocus=autofocus)
             else:
-                polylines = []
-                for pls in pdfjob.extract_vectors(s["pdf_path"], page=1).values():
-                    polylines.extend(pls)
+                polylines, vecs = [], {}
+                for p in placed:
+                    if p["page"] not in vecs:
+                        vecs[p["page"]] = [pl for pls in pdfjob.extract_vectors(
+                            s["pdf_path"], page=p["page"]).values() for pl in pls]
+                    bx0, by0 = p["bbox"][0], p["bbox"][1]
+                    polylines.extend([[(lambda rx, ry: (rx + p["ox"], ry + p["oy"]))(
+                                           *_rot_point(x - bx0, y - by0, p["R"], p["cw"], p["ch"]))
+                                       for (x, y) in pl] for pl in vecs[p["page"]]])
                 if not polylines:
                     return self._send_json({"error": "no vector lines found to cut"}, 400)
-                polylines = [[(lambda rx, ry: (rx + ox, ry + oy))(*_rot_point(x - bx0, y - by0, R, cw, ch))
-                              for (x, y) in pl] for pl in polylines]
                 part = epilog.VectorPart(polylines, power=op["power"], speed=op["speed"],
                                          frequency=op.get("freq", 500))
                 job = epilog.build_job([part], dpi=epilog.VECTOR_DPI, title=title, autofocus=autofocus)
             sent = not dry_run
             if sent:
-                epilog.send_lpd(host, job, jobname="001", title=title,
-                                require_ack=not req.get("no_ack", False))
+                with SENDING:
+                    epilog.send_lpd(host, job, jobname="001", title=title,
+                                    require_ack=not req.get("no_ack", False))
             return self._send_json({"jobs": [{"title": title, "bytes": len(job), "sent": sent}],
                                     "dry_run": dry_run, "host": host, "placement": placement})
 
+        # ---- per-colour assignments: the original single-page path (first item) ----
+        p = placed[0]
+        bx0, by0, bx1, by1 = p["bbox"]
+        cw, ch, R, ox, oy = p["cw"], p["ch"], p["R"], p["ox"], p["oy"]
         assignments = [a for a in req.get("assignments", []) if a.get("op") in ("engrave", "cut")]
         if not assignments:
             return self._send_json({"error": "no engrave/cut assignments"}, 400)
@@ -328,7 +479,7 @@ class Handler(BaseHTTPRequestHandler):
             title = "%s-%s" % (a.get("op"), a.get("hex", "").lstrip("#") or jobno)
             if a["op"] == "engrave":
                 dpi = int(a["dpi"])
-                rgb = pdfjob.render_rgb(s["pdf_path"], dpi=dpi, page=1)
+                rgb = pdfjob.render_rgb(s["pdf_path"], dpi=dpi, page=p["page"])
                 mask = pdfjob.raster_from_colors(rgb, colors=[a["rgb"]] if a.get("rgb") else None)
                 # crop to global content bbox (px at this dpi), then rotate
                 cx0 = int(round(bx0 / 25.4 * dpi)); cy0 = int(round(by0 / 25.4 * dpi))
@@ -339,7 +490,7 @@ class Handler(BaseHTTPRequestHandler):
                 job = epilog.build_job([part], dpi=dpi, title=title, autofocus=autofocus)
             else:  # cut
                 if vecs is None:
-                    vecs = pdfjob.extract_vectors(s["pdf_path"], page=1)
+                    vecs = pdfjob.extract_vectors(s["pdf_path"], page=p["page"])
                 polylines = vecs.get(a.get("hex"), [])
                 if not polylines:
                     jobs_summary.append({"title": title, "skipped": "no vector paths for %s" % a.get("hex")})
@@ -354,8 +505,9 @@ class Handler(BaseHTTPRequestHandler):
             if dry_run:
                 jobs_summary.append({"title": title, "bytes": len(job), "sent": False})
             else:
-                epilog.send_lpd(host, job, jobname="%03d" % jobno, title=title,
-                                require_ack=not req.get("no_ack", False))
+                with SENDING:
+                    epilog.send_lpd(host, job, jobname="%03d" % jobno, title=title,
+                                    require_ack=not req.get("no_ack", False))
                 jobs_summary.append({"title": title, "bytes": len(job), "sent": True})
 
         return self._send_json({"jobs": jobs_summary, "dry_run": dry_run,

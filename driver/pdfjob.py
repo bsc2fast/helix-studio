@@ -153,6 +153,9 @@ def raster_from_colors(rgb, colors=None, tol=48):
 # Vector extraction (for CUT) — pdftocairo SVG + a compact path flattener
 # ---------------------------------------------------------------------------
 SVG_NS = "{http://www.w3.org/2000/svg}"
+XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
+_NOT_DRAWN = {"defs", "clipPath", "mask", "pattern", "marker", "symbol",
+              "linearGradient", "radialGradient", "title", "desc", "metadata"}
 
 
 def _matmul(a, b):
@@ -259,12 +262,25 @@ def extract_vectors(path, page=1):
         tree = ET.parse(svg)
     root = tree.getroot()
     vh = root.get("height", "0")
-    # walk the tree carrying transforms; collect stroked/filled paths by color
+    # walk the tree carrying transforms; collect stroked/filled paths by color.
+    # <defs>, <clipPath> etc. are never drawn as such — a clip rectangle is not a
+    # cut line — so they are skipped; what they hold is drawn only through <use>
+    # (pdftocairo draws text as <use> of glyphs stored in <defs>), at the <use>'s
+    # position.
     result = {}
+    ids = {el.get("id"): el for el in root.iter() if el.get("id")}
 
-    def walk(el, m):
-        m = _matmul(m, _parse_transform(el.get("transform", "")))
+    def walk(el, m, via_use=False):
         tag = el.tag.replace(SVG_NS, "")
+        if tag in _NOT_DRAWN and not via_use:
+            return
+        m = _matmul(m, _parse_transform(el.get("transform", "")))
+        if tag == "use":
+            ref = ids.get((el.get(XLINK_HREF) or el.get("href") or "").lstrip("#"))
+            if ref is not None:
+                x, y = float(el.get("x", 0) or 0), float(el.get("y", 0) or 0)
+                walk(ref, _matmul(m, (1, 0, 0, 1, x, y)), via_use=True)
+            return
         if tag == "path" and el.get("d"):
             color = el.get("stroke") or el.get("fill") or "#000000"
             if color == "none":

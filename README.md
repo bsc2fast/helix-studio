@@ -168,7 +168,16 @@ as environment variables.
    X/Y is measured from the laser's home corner (top-left). `Rotate` turns it
    in 90° steps, `Center` centres it in the safe area. The outline is green
    while the placement is legal and red once it crosses the dashed safety
-   boundary — and **Send** is disabled while it is red.
+   boundary — and **Send** is disabled while it is red. Pick a **material
+   size** (A4, Arch B, Letter… — only sizes that fit the bed are listed) to see
+   your stock drawn on the bed; drag it, or type its X/Y in the **Material**
+   card, to match where the sheet really lies. `Rotate` on either card is only
+   enabled when the turned sheet or artwork still fits from where it sits — the
+   card says how far to move it when it doesn't.
+   **Multi-page PDFs** list every page down the left. Page 1 starts on the bed;
+   **Include** puts another page on in the first free spot, so several pages
+   can be laid out on one larger sheet and sent as one job. Overlapping pages
+   turn red and **Send** stays disabled until you move them apart.
 3. **Pick material and thickness**, then a **preset**. Engrave presets (`▦`)
    raster the artwork; cut presets (`✂`) follow its vector lines. Presets that
    cannot cut through the thickness you chose are hidden.
@@ -194,6 +203,7 @@ PDF ──pdftocairo──► preview + raster ──┬──► engrave: 1-bit
 |---|---|
 | `server.py` | the local web server + REST API, and the out-of-bounds guard |
 | `driver/epilog.py` | standalone Epilog driver (raster + vector + LPD send), ported from liblasercut. Vector cuts get a small **overcut** so the laser's start-of-vector firing lag doesn't leave the first edge uncut |
+| `driver/laserlink.py` | is the laser reachable (LPD port probe), and a local-network scan to find it |
 | `driver/pdfjob.py` | PDF → page size, colour raster, layer detection, vector extraction (Poppler + a compact SVG path flattener) |
 | `data/materials.json` | Epilog Mini/Helix suggested settings, 30 W column |
 | `data/machine.json` | the shipped bed calibration — override it in `config.json` |
@@ -203,8 +213,11 @@ Speed and power are 0–100 %. Engraving is specified in **DPI**, cutting in
 **frequency (Hz)**.
 
 The REST API is small enough to drive from a script: `POST /api/import` with
-raw PDF bytes, then `POST /api/send` with a placement and either a single
-`operation` or a list of per-colour `assignments`.
+raw PDF bytes (returns the page count and page 1), `GET /api/page/<id>/<n>` for
+any other page, then `POST /api/send` with an `operation` and the placed pages
+as `items: [{page, offset_mm: [x, y], rotation}]` — or a single `offset_mm` +
+`rotation` for page 1, or a list of per-colour `assignments`. Placed pages must
+not overlap; they go to the laser as one job.
 
 ---
 
@@ -216,13 +229,19 @@ effect. On Windows, reopen the terminal after installing.
 **`Address already in use`** — something else holds port 4060. Use
 `python3 server.py --port 4070`.
 
+**The IP chip says Scan** — the laser didn't answer on port 515. Helix Studio
+scans your local network for it (right away, then every 30 s) and switches to
+the new address when it finds exactly one; if several printers answer it asks
+which one is the laser. Send stays disabled until it's reachable.
+
 **The job never arrives / Send hangs** — check `laser_host` is right and that
 the machine is on and idle: `ping <laser-ip>`. The laser must be reachable on
 TCP port 515, which means the same network segment as your computer, no VPN in
 the way.
 
 **"No printable artwork detected"** — the first page rendered blank. Check the
-PDF isn't a single huge white image, or that the artwork isn't on page 2.
+PDF isn't a single huge white image. For a multi-page PDF, include the page that
+has the artwork from the page list on the left.
 
 **A cut preset does nothing** — cutting follows *vector* paths. A PDF that
 contains only a photo or a flattened bitmap has none; export vectors from your

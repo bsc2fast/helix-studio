@@ -10,12 +10,15 @@
     --ink:#e8e9ee; --muted:#9297a8; --accent:#7bd88f; --accent2:#6aa8ff;
     --danger:#ff6b6b; --warn:#ffb454; --bed:#0c0d11; --bedline:#3a3f50;
     --bar:#0f1420; --barline:#2a3040; --shadow:0 10px 34px rgba(0,0,0,.45);
+    --ctl-h:34px;   /* one height for every app-bar control */
+    --sheet:rgba(180,140,255,.12); --sheetline:#b18cff;   /* the stock sheet on the bed */
   }
   html[data-theme="light"]{
     --bg:#eef1f5; --panel:#ffffff; --panel2:#eceff4; --line:#d6dae2;
     --ink:#1a1c22; --muted:#5b6274; --accent:#1f9d4d; --accent2:#2f6fed;
     --danger:#d23b3b; --warn:#c77d15; --bed:#dfe3ea; --bedline:#b0b8c6;
     --bar:#e7edf9; --barline:#cdd6e6; --shadow:0 10px 30px rgba(20,30,60,.16);
+    --sheet:rgba(124,77,255,.09); --sheetline:#7c4dff;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
@@ -30,25 +33,51 @@
     overflow:hidden;z-index:3}
   .brand{font-size:15px;font-weight:600;letter-spacing:.3px;white-space:nowrap;
     cursor:pointer;flex-shrink:0}
-  .pill{font-size:12px;color:var(--muted);background:var(--panel2);
-    border:1px solid var(--line);border-radius:20px;padding:4px 11px;white-space:nowrap;flex-shrink:0}
-  .pill b{color:var(--accent)}
+  /* laser chip: IP + live dot while reachable; a Scan button when it isn't */
+  .pill{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--panel2);
+    border:1px solid var(--line);border-radius:999px;padding:0 13px 0 11px;height:var(--ctl-h);
+    white-space:nowrap;flex-shrink:0;display:inline-flex;align-items:center;gap:7px;cursor:default}
+  .pill .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0}
+  .pill.online .dot{background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent)}
+  .pill.busy .dot{background:var(--warn)}
+  .pill:not(.scan):hover{border-color:var(--line)}
+  .pill.scan{cursor:pointer;color:var(--ink)}
+  .pill.scan:hover{border-color:var(--accent2)}
+  .pill.scanning{cursor:progress;color:var(--muted)}
+  .pill svg{width:15px;height:15px;flex-shrink:0}
+  .pill.scanning svg{animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .laserwrap{position:relative;flex-shrink:0}
+  /* shown when a scan finds more than one LPD device: the user picks the laser */
+  .pick{position:fixed;z-index:10;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;box-shadow:var(--shadow);padding:6px;min-width:190px}
+  .pick p{margin:4px 8px 6px;font-size:11.5px;color:var(--muted)}
+  .pick button{display:block;width:100%;text-align:left;border:0;border-radius:8px;
+    background:none;padding:7px 10px;font-size:13px}
+  .pick button:hover{background:var(--panel2)}
   .spacer{flex:1;min-width:8px}
   header select,input[type=number],input[type=text]{background:var(--panel2);color:var(--ink);
     border:1px solid var(--line);border-radius:7px;padding:6px 9px;font:inherit;flex-shrink:0}
   /* widths are measured from the option text in app.js (fitBar) and set as the
      flex basis; these are only the fallback + the floor they shrink to when the
      window is too narrow for everything at its natural width */
-  header select{font-size:13px;flex:0 1 auto;min-width:72px;
-    text-overflow:ellipsis;max-width:340px}
+  header select{font-size:13px;flex:0 1 auto;min-width:72px;height:var(--ctl-h);
+    text-overflow:ellipsis;max-width:340px;border-radius:999px;padding:0 30px 0 14px;
+    cursor:pointer;-webkit-appearance:none;appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%238a90a2' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 11px center;background-size:12px}
+  header select:hover:not(:disabled){border-color:var(--accent2)}
+  header select:disabled{opacity:.55;cursor:not-allowed}
   input[type=number]{width:78px}
-  .icon{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);
+  .icon{width:var(--ctl-h);height:var(--ctl-h);border-radius:50%;padding:0;border:1px solid var(--line);
     background:var(--panel2);color:var(--ink);cursor:pointer;font-size:16px;line-height:1;
     display:inline-flex;align-items:center;justify-content:center}
   .icon:hover{border-color:var(--accent2)}
   .reset{color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline}
   .send{background:var(--accent2);color:#fff;border:1px solid var(--accent2);
-    border-radius:8px;font-weight:600;padding:8px 20px;font-size:14px;cursor:pointer}
+    border-radius:999px;font-weight:600;padding:0 18px 0 15px;font-size:13.5px;cursor:pointer;
+    height:var(--ctl-h);display:inline-flex;align-items:center;gap:7px;flex-shrink:0}
+  .send svg{width:16px;height:16px;flex-shrink:0}
   .send:hover{filter:brightness(1.06)}
   .send:disabled{opacity:.4;cursor:not-allowed}
 
@@ -60,6 +89,32 @@
     box-shadow:var(--shadow);touch-action:none;user-select:none;display:block}
   #bed .art{cursor:grab}
   #bed .art.drag{cursor:grabbing}
+  #bed .ptag{fill:var(--muted);font-weight:600}
+  #bed .sheetrect{cursor:move}
+
+  /* ---- page rail (multi-page PDFs) ---- */
+  .rail{width:156px;flex-shrink:0;display:flex;flex-direction:column;min-height:0;
+    background:var(--panel);border-right:1px solid var(--line)}
+  .railhead{padding:12px 12px 8px;display:flex;flex-direction:column;gap:7px}
+  .railhead span{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  .railhead button{border-radius:999px;padding:5px 10px;font-size:12px}
+  .thumbs{flex:1;overflow:auto;padding:4px 12px 14px;display:flex;flex-direction:column;gap:10px}
+  .thumb{border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:6px;
+    cursor:default;transition:border-color .12s, box-shadow .12s}
+  .thumb.on{border-color:var(--accent);cursor:pointer;
+    box-shadow:0 0 0 1px var(--accent) inset}
+  .thumb.active{box-shadow:0 0 0 1px var(--accent) inset, 0 0 0 3px color-mix(in srgb, var(--accent2) 55%, transparent)}
+  .thumb.bad{border-color:var(--danger);box-shadow:0 0 0 1px var(--danger) inset}
+  .thumb.bad.active{box-shadow:0 0 0 1px var(--danger) inset, 0 0 0 3px color-mix(in srgb, var(--accent2) 55%, transparent)}
+  .tframe{background:#fff;border-radius:6px;overflow:hidden;display:flex;justify-content:center}
+  .tframe img{display:block;max-width:100%;height:auto}
+  .thumb:not(.on) .tframe{opacity:.6}
+  .tfoot{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:6px;
+    font-size:11.5px;color:var(--muted)}
+  .thumb.on .tfoot span{color:var(--ink);font-weight:600}
+  .tbtn{border-radius:999px;padding:3px 10px;font-size:11.5px}
+  .thumb:not(.on) .tbtn{background:var(--accent2);border-color:var(--accent2);color:#fff}
+  .thumb.busy .tbtn,.thumb.blank .tbtn{background:none;border-color:var(--line);color:var(--muted);pointer-events:none}
 
   .drop{position:absolute;inset:24px;display:flex;flex-direction:column;
     align-items:center;justify-content:center;cursor:pointer;border-radius:12px;color:var(--muted)}
@@ -70,21 +125,27 @@
   .hint{color:var(--muted);font-size:12px}
 
   /* ---- floating controls (bottom-right) ---- */
+  /* a column of separate cards: Material (the stock) above Artwork (the pages) */
   .floating{position:absolute;right:18px;bottom:18px;width:216px;
-    max-height:calc(100% - 36px);overflow:auto;background:var(--panel);
-    border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px;z-index:2}
-  .floating h2{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px}
-  .floating section{margin-bottom:16px}
-  .floating section:last-child{margin-bottom:0}
+    max-height:calc(100% - 36px);overflow:auto;z-index:2;
+    display:flex;flex-direction:column;gap:12px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    box-shadow:var(--shadow);padding:14px;flex-shrink:0}
+  .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px}
   .fld{display:flex;flex-direction:column;gap:3px;margin-bottom:8px}
   .fld label{font-size:11px;color:var(--muted)}
   .fld input{width:100%}
   button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid var(--line);
     background:var(--panel2);color:var(--ink);padding:8px 12px}
-  button:hover{border-color:var(--accent2)}
-  #placeSection button{display:block;width:100%;margin-top:8px}
+  button:hover:not(:disabled){border-color:var(--accent2)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  #placeSection button,#sheetSection button{display:block;width:100%;margin-top:8px}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .pair .fld{margin-bottom:0}
+  #sheetSection h2 span{color:var(--sheetline)}
   .placeInfo{font-size:11.5px;color:var(--muted);margin:10px 0 0;line-height:1.45}
-  .warn{color:var(--danger);font-size:12px;margin:6px 0 0}
+  .warn{color:var(--danger);font-size:12px;margin:6px 0 0;white-space:pre-line}
+  .note{color:var(--sheetline);font-size:12px;margin:6px 0 0;white-space:pre-line}
 
   .layer{border:1px solid var(--line);border-radius:9px;padding:10px;margin-bottom:8px;background:var(--panel2)}
   .layer .top{display:flex;align-items:center;gap:9px;margin-bottom:8px}
@@ -104,7 +165,10 @@
 <body>
 <header>
   <div class="brand" id="brand" title="Start over (load a new PDF)">Helix Studio</div>
-  <span class="pill" id="laserPill">laser —</span>
+  <div class="laserwrap">
+    <button class="pill" id="laserPill" type="button" title="Checking the laser…"><span class="dot"></span><span id="laserTxt">—</span></button>
+    <div class="pick" id="laserPick" hidden></div>
+  </div>
   <select id="machine" title="Machine model"></select>
   <select id="material"><option value="">— material —</option></select>
   <select id="thickness" title="Material thickness">
@@ -119,13 +183,24 @@
     <option value="10">10 mm</option>
     <option value="12">12 mm</option>
   </select>
+  <select id="sheet" title="Material size — drawn on the bed from the origin corner"></select>
   <select id="preset" disabled><option value="">— preset —</option></select>
-  <button class="send" id="sendBtn" disabled>Send</button>
+  <button class="send" id="sendBtn" disabled>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+    <span id="sendLbl">Send</span>
+  </button>
   <div class="spacer"></div>
   <button class="icon" id="themeBtn" title="Toggle light / dark">☀</button>
 </header>
 
 <main>
+  <aside class="rail" id="rail" hidden>
+    <div class="railhead">
+      <span id="railCount"></span>
+      <button type="button" id="includeAll">Include all pages</button>
+    </div>
+    <div class="thumbs" id="thumbs"></div>
+  </aside>
   <div class="bedwrap">
     <svg id="bed" preserveAspectRatio="xMidYMid meet"></svg>
     <div class="drop" id="drop">
@@ -138,16 +213,31 @@
   </div>
 
   <div class="floating" id="controls" hidden>
-    <section id="placeSection">
-      <h2>Placement</h2>
-      <div class="fld"><label>X (mm)</label><input type="number" id="offx" value="0" step="1"></div>
-      <div class="fld"><label>Y (mm)</label><input type="number" id="offy" value="0" step="1"></div>
+    <section class="card" id="sheetSection" hidden>
+      <h2>Material <span id="sheetWhich"></span></h2>
+      <div class="pair">
+        <div class="fld"><label>X (mm)</label><input type="number" id="sheetx" value="0" step="1" min="0"></div>
+        <div class="fld"><label>Y (mm)</label><input type="number" id="sheety" value="0" step="1" min="0"></div>
+      </div>
+      <button id="sheetRotate">⟳ Rotate · <span id="sheetOrient">landscape</span></button>
+      <button id="sheetHome" title="Push the sheet back into the home corner">Move to corner</button>
+      <p class="placeInfo" id="sheetInfo"></p>
+      <p class="placeInfo" id="sheetRotWhy" hidden></p>
+    </section>
+    <section class="card" id="placeSection" hidden>
+      <h2>Artwork <span id="placeWhich"></span></h2>
+      <div class="pair">
+        <div class="fld"><label>X (mm)</label><input type="number" id="offx" value="0" step="1"></div>
+        <div class="fld"><label>Y (mm)</label><input type="number" id="offy" value="0" step="1"></div>
+      </div>
       <button id="rotateBtn" title="Rotate 90°">⟳ Rotate <span id="rotLbl">0°</span></button>
       <button id="centerBtn">Center</button>
+      <p class="placeInfo" id="rotWhy" hidden></p>
       <p class="placeInfo" id="placeInfo"></p>
       <p class="warn" id="boundsWarn" hidden></p>
+      <p class="note" id="sheetNote" hidden></p>
+      <div class="out" id="out"></div>
     </section>
-    <div class="out" id="out"></div>
   </div>
 </main>
 
