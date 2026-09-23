@@ -37,42 +37,40 @@
   .chip b{color:var(--ink);font-weight:600}
   select,input[type=number],input[type=text]{background:var(--panel2);color:var(--ink);
     border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:inherit}
-  input[type=number]{width:70px}
+  input[type=number]{width:80px}
   .icon{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);
     background:var(--panel2);color:var(--ink);cursor:pointer;font-size:16px;line-height:1;
     display:inline-flex;align-items:center;justify-content:center}
   .icon:hover{border-color:var(--accent2)}
   .reset{color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline}
 
-  /* ---- layout ---- */
-  main{flex:1;display:flex;overflow:hidden}
-  .left{flex:1;padding:22px;overflow:auto;display:flex;align-items:flex-start;justify-content:center}
-  .right{width:420px;flex-shrink:0;border-left:1px solid var(--line);
-    background:var(--panel);padding:18px;overflow:auto}
-  section{margin-bottom:22px}
-  h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 10px}
-
-  .drop{border:2px dashed var(--line);border-radius:12px;padding:60px 30px;text-align:center;
-    color:var(--muted);width:100%;max-width:520px;cursor:pointer}
+  /* ---- primary full-width view ---- */
+  main{flex:1;overflow:auto;padding:24px}
+  .drop{border:2px dashed var(--line);border-radius:14px;padding:72px 30px;text-align:center;
+    color:var(--muted);max-width:640px;margin:6vh auto 0;cursor:pointer}
   .drop.hot{border-color:var(--accent2);color:var(--ink)}
-  .stage{position:relative;background:
-    repeating-conic-gradient(var(--panel2) 0 25%, var(--panel) 0 50%) 50%/28px 28px;
-    border:1px solid var(--line);border-radius:10px;padding:16px;display:none}
-  .stage.on{display:block}
-  .stage img{display:block;max-width:100%;max-height:74vh;background:#fff;border-radius:4px}
+  .hint{color:var(--muted);font-size:12px}
+
+  .workspace{display:flex;gap:24px;max-width:1180px;margin:0 auto;align-items:flex-start}
+  .bedcol{flex:1;min-width:0}
+  .sidecol{width:380px;flex-shrink:0}
+  @media (max-width:900px){ .workspace{flex-direction:column} .sidecol{width:100%} }
+
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 10px}
+  section{margin-bottom:22px}
 
   /* ---- bed ---- */
-  #bed{width:100%;border:1px solid var(--line);border-radius:8px;background:var(--bed);
+  #bed{width:100%;border:1px solid var(--line);border-radius:10px;background:var(--bed);
     touch-action:none;user-select:none;display:block}
   #bed .art{cursor:grab}
   #bed .art.drag{cursor:grabbing}
-  .placeRow{display:flex;align-items:flex-end;gap:10px;margin-top:12px;flex-wrap:wrap}
+  .placeRow{display:flex;align-items:flex-end;gap:10px;margin-top:14px;flex-wrap:wrap}
   .fld{display:flex;flex-direction:column;gap:3px}
   .fld label{font-size:11px;color:var(--muted)}
   button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid var(--line);
     background:var(--panel2);color:var(--ink);padding:8px 12px}
   button:hover{border-color:var(--accent2)}
-  .placeInfo{font-size:12px;color:var(--muted);margin:10px 0 0}
+  .placeInfo{font-size:12px;color:var(--muted);margin:12px 0 0}
   .warn{color:var(--danger);font-size:12px;margin:6px 0 0}
 
   .layer{border:1px solid var(--line);border-radius:9px;padding:12px;margin-bottom:10px;background:var(--panel2)}
@@ -85,17 +83,13 @@
   .grid4 label{font-size:11px;color:var(--muted);display:block;margin-bottom:2px}
   .layer.ignored{opacity:.5}
 
-  .hostRow{display:flex;align-items:center;gap:10px;margin-bottom:10px;color:var(--muted);font-size:13px}
-  .hostRow input[type=text]{flex:1}
-  .toggle{display:inline-flex;align-items:center;gap:6px}
   .send{width:100%;background:var(--accent2);color:#fff;border-color:var(--accent2);
     font-weight:600;padding:12px;font-size:15px}
   .send:disabled{opacity:.45;cursor:not-allowed}
   .out{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:12px;
     background:var(--bed);border:1px solid var(--line);border-radius:8px;padding:10px;
-    margin-top:10px;max-height:170px;overflow:auto;display:none}
+    margin-top:10px;max-height:220px;overflow:auto;display:none}
   .out.on{display:block}
-  .hint{color:var(--muted);font-size:12px}
 </style>
 </head>
 <body>
@@ -113,43 +107,39 @@
 </header>
 
 <main>
-  <div class="left">
-    <div class="drop" id="drop">
-      <p style="font-size:16px;margin:0 0 6px">Drop a PDF here</p>
-      <p class="hint" style="margin:0">or click to choose · your coaster / panel artwork</p>
-      <input type="file" id="file" accept="application/pdf" hidden />
-    </div>
-    <div class="stage" id="stage"><img id="preview" alt="artwork preview" /></div>
+  <div class="drop" id="drop">
+    <p style="font-size:17px;margin:0 0 6px">Drop a PDF here</p>
+    <p class="hint" style="margin:0">or click to choose · your coaster / panel artwork</p>
+    <input type="file" id="file" accept="application/pdf" hidden />
   </div>
 
-  <div class="right">
-    <section id="bedSection" hidden>
-      <h2>Bed placement — drag to move</h2>
-      <svg id="bed" preserveAspectRatio="xMidYMid meet"></svg>
-      <div class="placeRow">
-        <div class="fld"><label>X (mm)</label><input type="number" id="offx" value="0" step="1"></div>
-        <div class="fld"><label>Y (mm)</label><input type="number" id="offy" value="0" step="1"></div>
-        <button id="rotateBtn" title="Rotate 90°">⟳ Rotate <span id="rotLbl">0°</span></button>
-        <button id="centerBtn" title="Center on bed">Center</button>
-      </div>
-      <p class="placeInfo" id="placeInfo"></p>
-      <p class="warn" id="boundsWarn" hidden></p>
-    </section>
+  <div class="workspace" id="workspace" hidden>
+    <div class="bedcol">
+      <section id="bedSection">
+        <h2>Bed placement — drag the artwork to move it</h2>
+        <svg id="bed" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="placeRow">
+          <div class="fld"><label>X (mm)</label><input type="number" id="offx" value="0" step="1"></div>
+          <div class="fld"><label>Y (mm)</label><input type="number" id="offy" value="0" step="1"></div>
+          <button id="rotateBtn" title="Rotate 90°">⟳ Rotate <span id="rotLbl">0°</span></button>
+          <button id="centerBtn" title="Center on bed">Center</button>
+        </div>
+        <p class="placeInfo" id="placeInfo"></p>
+        <p class="warn" id="boundsWarn" hidden></p>
+      </section>
+    </div>
 
-    <section id="layersSection" hidden>
-      <h2>Layers (by colour)</h2>
-      <div id="layers"></div>
-    </section>
-
-    <section id="sendSection" hidden>
-      <div class="hostRow">
-        <span>laser</span><input type="text" id="host">
-        <label class="toggle"><input type="checkbox" id="autofocus"> autofocus</label>
-      </div>
-      <button class="send" id="sendBtn">Send to laser</button>
-      <p class="hint" style="margin:8px 0 0">Jobs queue on the laser; press <b>GO</b> on the machine to run.</p>
-      <div class="out" id="out"></div>
-    </section>
+    <div class="sidecol">
+      <section id="layersSection" hidden>
+        <h2>Layers (by colour)</h2>
+        <div id="layers"></div>
+      </section>
+      <section id="sendSection">
+        <button class="send" id="sendBtn">Send to laser</button>
+        <p class="hint" style="margin:8px 0 0">Jobs queue on the laser; press <b>GO</b> on the machine to run.</p>
+        <div class="out" id="out"></div>
+      </section>
+    </div>
   </div>
 </main>
 

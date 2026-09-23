@@ -2,7 +2,7 @@
 const $ = s => document.querySelector(s);
 const SVGNS = "http://www.w3.org/2000/svg";
 const state = {
-  materials: [], session: null, machine: null,
+  materials: [], session: null, machine: null, laserHost: "192.168.1.6",
   off: { x: 0, y: 0 }, rot: 0,
 };
 
@@ -20,8 +20,8 @@ async function boot() {
   try { applyTheme(localStorage.getItem("hs-theme") || "dark"); } catch (e) { applyTheme("dark"); }
   const cfg = await (await fetch("/api/config")).json();
   state.machine = cfg.machine;
+  state.laserHost = cfg.laser_host;
   $("#laserPill").innerHTML = "laser <b>" + cfg.laser_host + "</b>";
-  $("#host").value = cfg.laser_host;
   const m = cfg.machine;
   const bed = $("#bed");
   bed.setAttribute("viewBox", `0 0 ${m.bed_w_mm} ${m.bed_h_mm}`);
@@ -54,14 +54,11 @@ async function importPdf(file) {
   state.session = data;
   state.rot = 0;
   drop.style.display = "none";
-  $("#stage").classList.add("on");
-  $("#preview").src = data.preview + "?t=" + Date.now();
+  $("#workspace").hidden = false;
   $("#pagePill").hidden = false;
   $("#pagePill").textContent = `${data.info.width_mm} × ${data.info.height_mm} mm`;
   $("#resetBtn").hidden = false;
-  $("#bedSection").hidden = false;
   $("#layersSection").hidden = !data.layers.length;
-  $("#sendSection").hidden = false;
   buildBed();
   centerArt();
   renderLayers();
@@ -257,9 +254,9 @@ $("#sendBtn").onclick = async () => {
     const data = await (await fetch("/api/send", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id: state.session.id, host: $("#host").value, material: m.name,
+        id: state.session.id, host: state.laserHost, material: m.name,
         assignments, offset_mm: [state.off.x, state.off.y], rotation: state.rot,
-        autofocus: $("#autofocus").checked,
+        autofocus: false,
       }),
     })).json();
     if (data.error) out.textContent = "ERROR: " + data.error;
