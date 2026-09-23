@@ -183,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
             fs = int(req.get("frame_speed", 40))
             rect = epilog.rect_polyline(ox, oy, cw, ch)
             part = epilog.VectorPart([rect], power=fp, speed=fs, frequency=500)
-            job = epilog.build_job([part], dpi=500, title="frame-test", overcut_mm=0)
+            job = epilog.build_job([part], dpi=epilog.VECTOR_DPI, title="frame-test", overcut_mm=0)
             if not dry_run:
                 epilog.send_lpd(host, job, jobname="900", title="frame-test",
                                 require_ack=not req.get("no_ack", False))
@@ -224,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
                 polylines = [[(x - bx0 + ox, y - by0 + oy) for (x, y) in pl] for pl in polylines]
                 part = epilog.VectorPart(polylines, power=a["power"], speed=a["speed"],
                                          frequency=a.get("freq", 500))
-                job = epilog.build_job([part], dpi=500, title=title, autofocus=autofocus)
+                job = epilog.build_job([part], dpi=epilog.VECTOR_DPI, title=title, autofocus=autofocus)
 
             if dry_run:
                 jobs_summary.append({"title": title, "bytes": len(job), "sent": False})

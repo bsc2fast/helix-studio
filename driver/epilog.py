@@ -22,6 +22,12 @@ FOCUSWIDTH = 0.0252  # mm per focus unit (liblasercut)
 BED_W_MM = 609.6  # 24"
 BED_H_MM = 457.2  # 18" (Helix 24x18)
 
+# The Epilog's HP-GL vector engine uses a fixed 1200 units/inch. Vector
+# coordinates MUST be generated at this resolution or geometry is scaled by
+# (chosen_dpi / 1200). Verified: 500 dpi gave 0.417x. Do not change without
+# re-measuring a cut square.
+VECTOR_DPI = 1200
+
 
 def mm2focus(mm):
     return int(mm / FOCUSWIDTH)
