@@ -36,11 +36,11 @@
   .spacer{flex:1;min-width:8px}
   header select,input[type=number],input[type=text]{background:var(--panel2);color:var(--ink);
     border:1px solid var(--line);border-radius:7px;padding:6px 9px;font:inherit;flex-shrink:0}
-  header select{font-size:13px}
-  #machine{max-width:164px}
-  #material{max-width:126px}
-  #thickness{width:104px}
-  #preset{max-width:172px}
+  /* widths are measured from the option text in app.js (fitBar) and set as the
+     flex basis; these are only the fallback + the floor they shrink to when the
+     window is too narrow for everything at its natural width */
+  header select{font-size:13px;flex:0 1 auto;min-width:72px;
+    text-overflow:ellipsis;max-width:340px}
   input[type=number]{width:78px}
   .icon{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);
     background:var(--panel2);color:var(--ink);cursor:pointer;font-size:16px;line-height:1;

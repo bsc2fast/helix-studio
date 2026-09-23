@@ -17,6 +17,39 @@ function applyTheme(t) {
 $("#themeBtn").onclick = () =>
   applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 
+// ---------- app bar: size each dropdown to the text it has to show ----------
+// Fixed widths truncated real labels ("Epilog Helix 24x18 (3…") while the bar
+// still had spare room. Each select instead asks for the width of its WIDEST
+// option (capped), so the text fits and the width never jumps as the selection
+// changes; flex-shrink still squeezes them if the window gets narrow.
+const FIT_CAP = { machine: 240, material: 190, thickness: 108, preset: 330 };
+// when the window is too narrow for all of them, they give up space in order of
+// how often they are touched and how much they say: the machine (set once, and
+// its name is guessable from a few letters) shrinks first, the preset last,
+// and each stops at a floor that still shows something useful
+const FIT_SHRINK = { machine: 4, material: 1, thickness: 0, preset: 1.5 };
+const FIT_MIN = { machine: 80, material: 92, thickness: 84, preset: 140 };
+let measureCtx = null;
+function textWidth(el, text) {
+  measureCtx = measureCtx || document.createElement("canvas").getContext("2d");
+  const cs = getComputedStyle(el);
+  measureCtx.font = `${cs.fontWeight} ${cs.fontSize}/${cs.lineHeight} ${cs.fontFamily}`;
+  return measureCtx.measureText(text).width;
+}
+function fitSelect(sel) {
+  if (!sel || !sel.options.length) return;
+  const cs = getComputedStyle(sel);
+  // padding + borders + room for the native dropdown arrow
+  const chrome = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) +
+    parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth) + 24;
+  const widest = [...sel.options].reduce((w, o) => Math.max(w, textWidth(sel, o.text)), 0);
+  sel.style.flexBasis =
+    Math.round(Math.max(96, Math.min(FIT_CAP[sel.id] || 200, widest + chrome))) + "px";
+  sel.style.flexShrink = FIT_SHRINK[sel.id] != null ? FIT_SHRINK[sel.id] : 1;
+  sel.style.minWidth = (FIT_MIN[sel.id] || 96) + "px";
+}
+function fitBar() { ["#machine", "#material", "#thickness", "#preset"].forEach(s => fitSelect($(s))); }
+
 // ---------- boot ----------
 async function boot() {
   try { applyTheme(localStorage.getItem("hs-theme") || "dark"); } catch (e) { applyTheme("dark"); }
@@ -37,6 +70,7 @@ async function boot() {
   state.materials = mat.materials;
   const sel = $("#material");
   mat.materials.forEach(mm => sel.appendChild(new Option(mm.name, mm.name)));
+  fitBar();
 }
 
 // size the bed SVG to fill its container while preserving the bed aspect
@@ -276,9 +310,13 @@ function renderPresets() {
     const icon = op.type === "cut" ? "✂" : "▦";
     const extra = op.type === "cut" ? `${op.freq}Hz` : `${op.dpi}dpi`;
     const thk = (op.type === "cut" && op.thickness_mm) ? ` · ≤${op.thickness_mm}mm` : "";
-    sel.appendChild(new Option(`${icon} ${op.label} · S${op.speed} P${op.power} · ${extra}${thk}`, i));
+    // the preset labels carry their own "(300 DPI)" / "(3 mm)" which we append
+    // anyway — drop the parenthetical so the option text stays readable
+    const label = op.label.replace(/\s*\((?:\d+\s*DPI|[\d.]+\s*mm)\)/i, "");
+    sel.appendChild(new Option(`${icon} ${label} · S${op.speed} P${op.power} · ${extra}${thk}`, i));
   });
   if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  fitSelect(sel);
   highlight(); updatePlacement();
 }
 $("#material").onchange = renderPresets;
