@@ -263,17 +263,25 @@ function currentOp() {
   const m = currentMaterial(), i = $("#preset").value;
   return (m && i !== "") ? m.operations[+i] : null;
 }
-$("#material").onchange = () => {
+function renderPresets() {
   const m = currentMaterial(), sel = $("#preset");
+  const T = parseFloat($("#thickness").value) || null;
+  const prev = sel.value;
   sel.innerHTML = '<option value="">— preset —</option>';
+  sel.disabled = !m;
   if (m) m.operations.forEach((op, i) => {
+    // hide cut presets that can't cut through the chosen thickness
+    if (op.type === "cut" && T != null && op.thickness_mm != null && op.thickness_mm < T) return;
     const icon = op.type === "cut" ? "✂" : "▦";
     const extra = op.type === "cut" ? `${op.freq}Hz` : `${op.dpi}dpi`;
-    sel.appendChild(new Option(`${icon} ${op.label} · S${op.speed} P${op.power} · ${extra}`, i));
+    const thk = (op.type === "cut" && op.thickness_mm) ? ` · ≤${op.thickness_mm}mm` : "";
+    sel.appendChild(new Option(`${icon} ${op.label} · S${op.speed} P${op.power} · ${extra}${thk}`, i));
   });
-  sel.disabled = !m;
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
   highlight(); updatePlacement();
-};
+}
+$("#material").onchange = renderPresets;
+$("#thickness").onchange = renderPresets;
 $("#preset").onchange = () => { highlight(); updatePlacement(); };
 
 // highlight artwork by selected preset: cut → red vector lines, engrave → green wash

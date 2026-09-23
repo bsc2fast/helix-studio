@@ -99,10 +99,22 @@
 </head>
 <body>
 <header>
-  <div class="brand">Helix Studio <span>· PDF → laser</span></div>
+  <div class="brand">Helix Studio</div>
   <span class="pill" id="laserPill">laser —</span>
   <select id="machine" title="Machine model"></select>
   <select id="material"><option value="">— material —</option></select>
+  <select id="thickness" title="Material thickness">
+    <option value="">— thickness —</option>
+    <option value="1">1 mm</option>
+    <option value="2">2 mm</option>
+    <option value="3">3 mm</option>
+    <option value="4">4 mm</option>
+    <option value="5">5 mm</option>
+    <option value="6">6 mm</option>
+    <option value="8">8 mm</option>
+    <option value="10">10 mm</option>
+    <option value="12">12 mm</option>
+  </select>
   <select id="preset" disabled><option value="">— preset —</option></select>
   <button class="send" id="sendBtn" disabled>Send</button>
   <div class="spacer"></div>
