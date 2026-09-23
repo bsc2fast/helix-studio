@@ -22,6 +22,9 @@ async function boot() {
   state.machine = cfg.machine;
   state.laserHost = cfg.laser_host;
   $("#laserPill").innerHTML = "laser <b>" + cfg.laser_host + "</b>";
+  const msel = $("#machine");
+  (cfg.machines || [cfg.machine]).forEach(mm => msel.appendChild(new Option(mm.name, mm.name)));
+  msel.value = cfg.machine.name;
   const m = cfg.machine;
   $("#bed").setAttribute("viewBox", `0 0 ${m.bed_w_mm} ${m.bed_h_mm}`);
   buildBed();
@@ -70,14 +73,11 @@ async function importPdf(file) {
   state.session = data;
   state.rot = 0;
   $("#drop").hidden = true;
-  $("#preHint").hidden = true;
-  $("#pagePill").hidden = false;
-  $("#pagePill").textContent = `${data.info.width_mm} × ${data.info.height_mm} mm`;
+  $("#controls").hidden = false;
   $("#resetBtn").hidden = false;
-  $("#placeSection").hidden = false;
   $("#layersSection").hidden = !data.layers.length;
-  $("#sendSection").hidden = false;
-  if (bedEls) { bedEls.art.hidden = false; bedEls.lbl.hidden = false; }
+  // SVG elements have no .hidden IDL property — must toggle the attribute
+  if (bedEls) { bedEls.art.removeAttribute("hidden"); bedEls.lbl.removeAttribute("hidden"); }
   centerArt();
   renderLayers();
 }
@@ -150,9 +150,10 @@ function attachDrag(art) {
 
 function updatePlacement() {
   if (!bedEls || !state.session) return;
+  const parsed = !!state.session.content_mm;
   clampOff();
   const d = artDims(), L = limits();
-  const ok = state.off.x >= 0 && state.off.y >= 0 &&
+  const ok = parsed && state.off.x >= 0 && state.off.y >= 0 &&
              state.off.x + d.w <= L.x + 0.01 && state.off.y + d.h <= L.y + 0.01;
   const fill = ok ? "rgba(123,216,143,.30)" : "rgba(255,107,107,.32)";
   const stroke = ok ? "var(--accent)" : "var(--danger)";
@@ -173,7 +174,8 @@ function updatePlacement() {
     `reaches (${(state.off.x + d.w).toFixed(0)}, ${(state.off.y + d.h).toFixed(0)}) · bed ${state.machine.bed_w_mm}×${state.machine.bed_h_mm}`;
   const warn = $("#boundsWarn");
   warn.hidden = ok;
-  if (!ok) warn.textContent = `⚠ Out of bounds — exceeds usable ${L.x.toFixed(0)}×${L.y.toFixed(0)} mm. Sending disabled.`;
+  if (!parsed) warn.textContent = "⚠ No printable artwork detected in this PDF.";
+  else if (!ok) warn.textContent = `⚠ Out of bounds — exceeds usable ${L.x.toFixed(0)}×${L.y.toFixed(0)} mm. Sending disabled.`;
   $("#sendBtn").disabled = !ok;
 }
 

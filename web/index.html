@@ -8,12 +8,12 @@
   :root{
     --bg:#14151a; --panel:#1d1f27; --panel2:#262933; --line:#333644;
     --ink:#e8e9ee; --muted:#9297a8; --accent:#7bd88f; --accent2:#6aa8ff;
-    --danger:#ff6b6b; --bed:#0c0d11; --bedline:#3a3f50; --shadow:0 8px 30px rgba(0,0,0,.4);
+    --danger:#ff6b6b; --bed:#0c0d11; --bedline:#3a3f50; --shadow:0 10px 34px rgba(0,0,0,.45);
   }
   html[data-theme="light"]{
     --bg:#eef1f5; --panel:#ffffff; --panel2:#eceff4; --line:#d6dae2;
     --ink:#1a1c22; --muted:#5b6274; --accent:#1f9d4d; --accent2:#2f6fed;
-    --danger:#d23b3b; --bed:#dfe3ea; --bedline:#b0b8c6; --shadow:0 8px 26px rgba(20,30,60,.12);
+    --danger:#d23b3b; --bed:#dfe3ea; --bedline:#b0b8c6; --shadow:0 10px 30px rgba(20,30,60,.16);
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
@@ -23,30 +23,33 @@
     display:flex;flex-direction:column;overflow:hidden}
 
   /* ---- app bar ---- */
-  header{display:flex;align-items:center;gap:14px;padding:9px 16px;
-    background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;z-index:2}
+  header{display:flex;align-items:center;gap:12px;padding:9px 16px;
+    background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;z-index:3}
   .brand{font-size:15px;font-weight:600;letter-spacing:.3px;white-space:nowrap}
   .brand span{color:var(--muted);font-weight:400}
   .pill{font-size:12px;color:var(--muted);background:var(--panel2);
     border:1px solid var(--line);border-radius:20px;padding:4px 11px;white-space:nowrap}
   .pill b{color:var(--accent)}
   .spacer{flex:1}
-  .matbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .presets{display:flex;gap:6px;flex-wrap:wrap;max-width:50vw}
+  .presets{display:flex;gap:6px;flex-wrap:wrap;max-width:34vw}
   .chip{font-size:11px;color:var(--muted);background:var(--panel2);
     border:1px solid var(--line);border-radius:6px;padding:3px 8px;white-space:nowrap}
   .chip b{color:var(--ink);font-weight:600}
   select,input[type=number],input[type=text]{background:var(--panel2);color:var(--ink);
-    border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:inherit}
-  input[type=number]{width:82px}
+    border:1px solid var(--line);border-radius:7px;padding:6px 9px;font:inherit}
+  input[type=number]{width:78px}
   .icon{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);
     background:var(--panel2);color:var(--ink);cursor:pointer;font-size:16px;line-height:1;
     display:inline-flex;align-items:center;justify-content:center}
   .icon:hover{border-color:var(--accent2)}
   .reset{color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline}
+  .send{background:var(--accent2);color:#fff;border:1px solid var(--accent2);
+    border-radius:8px;font-weight:600;padding:8px 20px;font-size:14px;cursor:pointer}
+  .send:hover{filter:brightness(1.06)}
+  .send:disabled{opacity:.4;cursor:not-allowed}
 
-  /* ---- main: bed canvas + sidebar ---- */
-  main{flex:1;display:flex;min-height:0}
+  /* ---- bed canvas ---- */
+  main{flex:1;position:relative;display:flex;min-height:0}
   .bedwrap{flex:1;position:relative;display:flex;align-items:center;justify-content:center;
     padding:24px;min-width:0}
   #bed{background:var(--bed);border:1px solid var(--line);border-radius:12px;
@@ -54,51 +57,45 @@
   #bed .art{cursor:grab}
   #bed .art.drag{cursor:grabbing}
 
-  /* drop overlay sits inside the bed area */
   .drop{position:absolute;inset:24px;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;gap:6px;cursor:pointer;border-radius:12px;
-    color:var(--muted);background:transparent}
+    align-items:center;justify-content:center;cursor:pointer;border-radius:12px;color:var(--muted)}
   .drop .box{border:2px dashed var(--line);border-radius:14px;padding:56px 48px;text-align:center;
-    background:color-mix(in srgb, var(--panel) 60%, transparent)}
+    background:color-mix(in srgb, var(--panel) 55%, transparent)}
   .drop.hot .box{border-color:var(--accent2);color:var(--ink)}
   .drop .big{font-size:18px;color:var(--ink);margin:0 0 6px}
   .hint{color:var(--muted);font-size:12px}
 
-  /* ---- sidebar ---- */
-  aside{width:360px;flex-shrink:0;border-left:1px solid var(--line);background:var(--panel);
-    padding:18px;overflow:auto}
-  aside .empty{color:var(--muted);font-size:13px;margin-top:8px}
-  h2{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 10px}
-  section{margin-bottom:20px}
-
+  /* ---- floating controls (bottom-right) ---- */
+  .floating{position:absolute;right:18px;bottom:18px;width:340px;
+    max-height:calc(100% - 36px);overflow:auto;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px;z-index:2}
+  .floating h2{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px}
+  .floating section{margin-bottom:16px}
+  .floating section:last-child{margin-bottom:0}
   .placeRow{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}
   .fld{display:flex;flex-direction:column;gap:3px}
   .fld label{font-size:11px;color:var(--muted)}
-  .fld input{width:88px}
+  .fld input{width:84px}
   button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid var(--line);
     background:var(--panel2);color:var(--ink);padding:8px 12px}
   button:hover{border-color:var(--accent2)}
   .btnrow{display:flex;gap:8px;margin-top:8px}
   .btnrow button{flex:1}
-  .placeInfo{font-size:12px;color:var(--muted);margin:12px 0 0}
+  .placeInfo{font-size:12px;color:var(--muted);margin:10px 0 0}
   .warn{color:var(--danger);font-size:12px;margin:6px 0 0}
 
-  .layer{border:1px solid var(--line);border-radius:9px;padding:12px;margin-bottom:10px;background:var(--panel2)}
-  .layer .top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-  .swatch{width:22px;height:22px;border-radius:5px;border:1px solid #0006;flex-shrink:0}
+  .layer{border:1px solid var(--line);border-radius:9px;padding:10px;margin-bottom:8px;background:var(--panel2)}
+  .layer .top{display:flex;align-items:center;gap:9px;margin-bottom:8px}
+  .swatch{width:20px;height:20px;border-radius:5px;border:1px solid #0006;flex-shrink:0}
   .layer .cov{font-size:11px;color:var(--muted)}
   .layer select{width:100%}
-  .grid4{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+  .grid4{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px}
   .grid4 input{width:100%}
   .grid4 label{font-size:11px;color:var(--muted);display:block;margin-bottom:2px}
   .layer.ignored{opacity:.5}
-
-  .send{width:100%;background:var(--accent2);color:#fff;border-color:var(--accent2);
-    font-weight:600;padding:12px;font-size:15px}
-  .send:disabled{opacity:.45;cursor:not-allowed}
   .out{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:12px;
-    background:var(--bed);border:1px solid var(--line);border-radius:8px;padding:10px;
-    margin-top:10px;max-height:220px;overflow:auto;display:none}
+    background:var(--bed);border:1px solid var(--line);border-radius:8px;padding:9px;
+    margin-top:4px;max-height:150px;overflow:auto;display:none}
   .out.on{display:block}
 </style>
 </head>
@@ -106,12 +103,11 @@
 <header>
   <div class="brand">Helix Studio <span>· PDF → laser</span></div>
   <span class="pill" id="laserPill">laser —</span>
-  <div class="matbar">
-    <select id="material"><option value="">— material —</option></select>
-    <div class="presets" id="presets"></div>
-  </div>
+  <select id="machine" title="Machine model"></select>
+  <select id="material"><option value="">— material —</option></select>
+  <div class="presets" id="presets"></div>
   <div class="spacer"></div>
-  <span class="pill" id="pagePill" hidden></span>
+  <button class="send" id="sendBtn" disabled>Send</button>
   <button class="icon" id="themeBtn" title="Toggle light / dark">☀</button>
   <a class="reset" id="resetBtn" hidden>start over</a>
 </header>
@@ -128,11 +124,9 @@
     </div>
   </div>
 
-  <aside>
-    <div id="preHint" class="empty">Import a PDF to place it on the bed.</div>
-
-    <section id="placeSection" hidden>
-      <h2>Placement</h2>
+  <div class="floating" id="controls" hidden>
+    <section id="placeSection">
+      <h2>Placement — drag on bed or set here</h2>
       <div class="placeRow">
         <div class="fld"><label>X (mm)</label><input type="number" id="offx" value="0" step="1"></div>
         <div class="fld"><label>Y (mm)</label><input type="number" id="offy" value="0" step="1"></div>
@@ -150,12 +144,8 @@
       <div id="layers"></div>
     </section>
 
-    <section id="sendSection" hidden>
-      <button class="send" id="sendBtn">Send to laser</button>
-      <p class="hint" style="margin:8px 0 0">Jobs queue on the laser; press <b>GO</b> on the machine to run.</p>
-      <div class="out" id="out"></div>
-    </section>
-  </aside>
+    <div class="out" id="out"></div>
+  </div>
 </main>
 
 <script src="/app.js"></script>

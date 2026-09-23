@@ -101,7 +101,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/materials":
             return self._send_json(load_materials())
         if path == "/api/config":
-            return self._send_json({"laser_host": LASER_HOST, "machine": load_machine()})
+            mc = load_machine()
+            return self._send_json({"laser_host": LASER_HOST, "machine": mc,
+                                    "machines": [mc]})
         if path.startswith("/preview/"):
             sid = path[len("/preview/"):].rsplit(".", 1)[0]
             s = SESSIONS.get(sid)
