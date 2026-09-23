@@ -6,3 +6,4 @@ __pycache__/
 config.json
 site/node_modules/
 site/.wrangler/
+site/dev.log
