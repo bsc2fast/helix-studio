@@ -141,6 +141,20 @@ class Handler(BaseHTTPRequestHandler):
         buf = BytesIO()
         rgb.save(buf, "PNG")
         layers = pdfjob.detect_layers(rgb)
+        # extracted vector geometry (page-mm), simplified, for the cut-line overlay
+        vectors = []
+        try:
+            for pls in pdfjob.extract_vectors(pdf_path, page=1).values():
+                for pl in pls:
+                    simp = []
+                    for (x, y) in pl:
+                        p = [round(x, 1), round(y, 1)]
+                        if not simp or abs(p[0] - simp[-1][0]) + abs(p[1] - simp[-1][1]) > 0.3:
+                            simp.append(p)
+                    if len(simp) >= 2:
+                        vectors.append(simp)
+        except Exception:
+            vectors = []
         bbox = pdfjob.content_bbox_mm(rgb, PREVIEW_DPI)
         content = None
         if bbox:
@@ -156,6 +170,7 @@ class Handler(BaseHTTPRequestHandler):
             "preview_px": rgb.size,
             "layers": layers,
             "content_mm": content,
+            "vectors": vectors,
         })
 
     def handle_send(self):
@@ -203,6 +218,38 @@ class Handler(BaseHTTPRequestHandler):
                          % (rw, rh, ox, oy, ox + rw, oy + rh, max_w, max_h),
                 "placement": placement, "blocked": True,
             }, 400)
+
+        # ---- single-operation send: one preset applied to the whole artwork ----
+        op = req.get("operation")
+        if op and op.get("type") in ("engrave", "cut"):
+            title = op["type"]
+            if op["type"] == "engrave":
+                dpi = int(op["dpi"])
+                rgb = pdfjob.render_rgb(s["pdf_path"], dpi=dpi, page=1)
+                mask = pdfjob.raster_from_colors(rgb, colors=None)  # all ink
+                cx0 = int(round(bx0 / 25.4 * dpi)); cy0 = int(round(by0 / 25.4 * dpi))
+                cx1 = int(round(bx1 / 25.4 * dpi)); cy1 = int(round(by1 / 25.4 * dpi))
+                mask = _rot_image(mask.crop((cx0, cy0, cx1, cy1)), R)
+                part = epilog.RasterPart(mask, power=op["power"], speed=op["speed"],
+                                         dpi=dpi, x_mm=ox, y_mm=oy)
+                job = epilog.build_job([part], dpi=dpi, title=title, autofocus=autofocus)
+            else:
+                polylines = []
+                for pls in pdfjob.extract_vectors(s["pdf_path"], page=1).values():
+                    polylines.extend(pls)
+                if not polylines:
+                    return self._send_json({"error": "no vector lines found to cut"}, 400)
+                polylines = [[(lambda rx, ry: (rx + ox, ry + oy))(*_rot_point(x - bx0, y - by0, R, cw, ch))
+                              for (x, y) in pl] for pl in polylines]
+                part = epilog.VectorPart(polylines, power=op["power"], speed=op["speed"],
+                                         frequency=op.get("freq", 500))
+                job = epilog.build_job([part], dpi=epilog.VECTOR_DPI, title=title, autofocus=autofocus)
+            sent = not dry_run
+            if sent:
+                epilog.send_lpd(host, job, jobname="001", title=title,
+                                require_ack=not req.get("no_ack", False))
+            return self._send_json({"jobs": [{"title": title, "bytes": len(job), "sent": sent}],
+                                    "dry_run": dry_run, "host": host, "placement": placement})
 
         assignments = [a for a in req.get("assignments", []) if a.get("op") in ("engrave", "cut")]
         if not assignments:

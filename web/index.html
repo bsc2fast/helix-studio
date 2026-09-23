@@ -103,9 +103,9 @@
   <span class="pill" id="laserPill">laser —</span>
   <select id="machine" title="Machine model"></select>
   <select id="material"><option value="">— material —</option></select>
-  <div class="presets" id="presets"></div>
-  <div class="spacer"></div>
+  <select id="preset" disabled><option value="">— preset —</option></select>
   <button class="send" id="sendBtn" disabled>Send</button>
+  <div class="spacer"></div>
   <button class="icon" id="themeBtn" title="Toggle light / dark">☀</button>
   <a class="reset" id="resetBtn" hidden>start over</a>
 </header>
@@ -132,12 +132,6 @@
       <p class="placeInfo" id="placeInfo"></p>
       <p class="warn" id="boundsWarn" hidden></p>
     </section>
-
-    <section id="layersSection" hidden>
-      <h2>Layers (by colour)</h2>
-      <div id="layers"></div>
-    </section>
-
     <div class="out" id="out"></div>
   </div>
 </main>

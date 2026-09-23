@@ -79,18 +79,26 @@ async function importPdf(file) {
   $("#drop").hidden = true;
   $("#controls").hidden = false;
   $("#resetBtn").hidden = false;
-  $("#layersSection").hidden = !data.layers.length;
   // SVG elements have no .hidden IDL property — toggle the attribute instead
   if (bedEls) {
-    bedEls.artimg.setAttributeNS("http://www.w3.org/1999/xlink", "href", data.preview + "?t=" + Date.now());
     bedEls.artimg.setAttribute("href", data.preview + "?t=" + Date.now());
     bedEls.artimg.setAttribute("width", state.page.w);
     bedEls.artimg.setAttribute("height", state.page.h);
     bedEls.artimg.removeAttribute("hidden");
     bedEls.art.removeAttribute("hidden");
+    buildCutlines(data.vectors || []);
   }
   centerArt();
-  renderLayers();
+  highlight();
+}
+
+// draw the extracted vector geometry (page-mm coords) into the cut overlay
+function buildCutlines(vectors) {
+  const g = bedEls.cutlines; g.innerHTML = "";
+  vectors.forEach(pl => {
+    const pts = pl.map(p => p[0] + "," + p[1]).join(" ");
+    g.appendChild(mk("polyline", { points: pts, fill: "none" }));
+  });
 }
 
 function artTransform(R, ox, oy, x0, y0, cw, ch) {
@@ -146,14 +154,22 @@ function buildBed() {
   drawRulers(bed, m);
   bed.appendChild(mk("circle", { cx: 0, cy: 0, r: 6, fill: "var(--accent2)" }));
 
-  // artwork image (clipped to the content rect), then the coloured border on top
+  // artwork image (clipped to the content rect)
   const g = mk("g", { "clip-path": "url(#artclip)" });
   const artimg = mk("image", { id: "artimg", preserveAspectRatio: "none", hidden: "hidden" });
   g.appendChild(artimg); bed.appendChild(g);
-  const art = mk("rect", { class: "art", rx: 1.5, fill: "none", "stroke-width": 2.5, hidden: "hidden" });
+  // engrave wash (green) + cut-line overlay (red vectors)
+  const engwash = mk("rect", { fill: "rgba(123,216,143,.28)", "pointer-events": "none", hidden: "hidden" });
+  bed.appendChild(engwash);
+  const cutlines = mk("g", { id: "cutlines", fill: "none", "stroke-width": 0.9,
+    "stroke-linejoin": "round", "pointer-events": "none", hidden: "hidden" });
+  bed.appendChild(cutlines);
+  // coloured border on top — pointer-events:all so the whole box is draggable despite fill:none
+  const art = mk("rect", { class: "art", rx: 1.5, fill: "none", "stroke-width": 2.5,
+    "pointer-events": "all", hidden: "hidden" });
   bed.appendChild(art);
 
-  bedEls = { art, artimg, clipR };
+  bedEls = { art, artimg, clipR, engwash, cutlines };
   attachDrag(art);
 }
 
@@ -214,7 +230,15 @@ function updatePlacement() {
   bedEls.clipR.setAttribute("width", Math.max(d.w, 0.1));
   bedEls.clipR.setAttribute("height", Math.max(d.h, 0.1));
   const c = state.session.content_mm;
-  if (c) bedEls.artimg.setAttribute("transform", artTransform(state.rot, ox, oy, c.x0_mm, c.y0_mm, c.w_mm, c.h_mm));
+  if (c) {
+    const tf = artTransform(state.rot, ox, oy, c.x0_mm, c.y0_mm, c.w_mm, c.h_mm);
+    bedEls.artimg.setAttribute("transform", tf);
+    bedEls.cutlines.setAttribute("transform", tf);
+  }
+  bedEls.engwash.setAttribute("x", ox);
+  bedEls.engwash.setAttribute("y", oy);
+  bedEls.engwash.setAttribute("width", Math.max(d.w, 0.1));
+  bedEls.engwash.setAttribute("height", Math.max(d.h, 0.1));
   $("#offx").value = Math.round(state.off.x);
   $("#offy").value = Math.round(state.off.y);
   $("#rotLbl").textContent = state.rot + "°";
@@ -225,7 +249,7 @@ function updatePlacement() {
   warn.hidden = ok;
   if (!parsed) warn.textContent = "⚠ No printable artwork detected in this PDF.";
   else if (!ok) warn.textContent = `⚠ Out of bounds — exceeds usable ${L.x.toFixed(0)}×${L.y.toFixed(0)} mm. Sending disabled.`;
-  $("#sendBtn").disabled = !ok;
+  $("#sendBtn").disabled = !(ok && currentOp());
 }
 
 $("#offx").oninput = e => { state.off.x = +e.target.value || 0; updatePlacement(); };
@@ -233,110 +257,55 @@ $("#offy").oninput = e => { state.off.y = +e.target.value || 0; updatePlacement(
 $("#rotateBtn").onclick = () => { state.rot = (state.rot + 90) % 360; clampOff(); updatePlacement(); };
 $("#centerBtn").onclick = () => centerArt();
 
-// ---------- material + presets ----------
+// ---------- material + preset dropdown ----------
 function currentMaterial() { return state.materials.find(m => m.name === $("#material").value) || null; }
-$("#material").onchange = () => { renderPresets(); renderLayers(); };
-
-function renderPresets() {
-  const box = $("#presets"); box.innerHTML = "";
-  const m = currentMaterial();
-  if (!m) return;
-  m.operations.forEach(op => {
+function currentOp() {
+  const m = currentMaterial(), i = $("#preset").value;
+  return (m && i !== "") ? m.operations[+i] : null;
+}
+$("#material").onchange = () => {
+  const m = currentMaterial(), sel = $("#preset");
+  sel.innerHTML = '<option value="">— preset —</option>';
+  if (m) m.operations.forEach((op, i) => {
     const icon = op.type === "cut" ? "✂" : "▦";
-    const extra = op.type === "cut" ? ` · ${op.freq}Hz` : ` · ${op.dpi}dpi`;
-    const chip = document.createElement("span");
-    chip.className = "chip";
-    chip.innerHTML = `${icon} ${op.label} · <b>S${op.speed} P${op.power}</b>${extra}`;
-    box.appendChild(chip);
+    const extra = op.type === "cut" ? `${op.freq}Hz` : `${op.dpi}dpi`;
+    sel.appendChild(new Option(`${icon} ${op.label} · S${op.speed} P${op.power} · ${extra}`, i));
   });
+  sel.disabled = !m;
+  highlight(); updatePlacement();
+};
+$("#preset").onchange = () => { highlight(); updatePlacement(); };
+
+// highlight artwork by selected preset: cut → red vector lines, engrave → green wash
+function highlight() {
+  if (!bedEls) return;
+  const op = currentOp();
+  const isCut = op && op.type === "cut";
+  const isEng = op && op.type === "engrave";
+  bedEls.cutlines.setAttribute("stroke", isCut ? "var(--danger)" : "transparent");
+  if (isCut) bedEls.cutlines.removeAttribute("hidden"); else bedEls.cutlines.setAttribute("hidden", "hidden");
+  if (isEng) bedEls.engwash.removeAttribute("hidden"); else bedEls.engwash.setAttribute("hidden", "hidden");
 }
 
-// ---------- layers ----------
-function renderLayers() {
-  const box = $("#layers"); box.innerHTML = "";
-  if (!state.session) return;
-  const m = currentMaterial();
-  if (!m) { box.innerHTML = "<p class='hint'>Choose a material to assign settings.</p>"; return; }
-  state.session.layers.forEach((L, i) => {
-    const div = document.createElement("div");
-    div.className = "layer"; div.dataset.i = i;
-    div.innerHTML = `<div class="top"><div class="swatch" style="background:${L.hex}"></div>
-      <div style="flex:1"><div>${L.hex}</div><div class="cov">${(L.coverage*100).toFixed(1)}% of art</div></div></div>`;
-
-    const opSel = document.createElement("select");
-    opSel.className = "opsel";
-    opSel.appendChild(new Option("Ignore this colour", "ignore"));
-    m.operations.forEach((op, oi) =>
-      opSel.appendChild(new Option(`${op.type === "cut" ? "✂ Cut" : "▦ Engrave"} — ${op.label}`, oi)));
-    div.appendChild(opSel);
-
-    const grid = document.createElement("div");
-    grid.className = "grid4";
-    grid.innerHTML = `
-      <div><label class="fld-l">Speed %</label><input type="number" class="sp" min="1" max="100"></div>
-      <div><label class="fld-l">Power %</label><input type="number" class="pw" min="1" max="100"></div>
-      <div class="dpiWrap"><label class="fld-l">DPI</label><input type="number" class="dpi"></div>
-      <div class="freqWrap"><label class="fld-l">Freq Hz</label><input type="number" class="freq"></div>`;
-    div.appendChild(grid);
-
-    function apply() {
-      if (opSel.value === "ignore") { div.classList.add("ignored"); grid.style.display = "none"; return; }
-      div.classList.remove("ignored"); grid.style.display = "";
-      const op = m.operations[+opSel.value];
-      grid.querySelector(".sp").value = op.speed;
-      grid.querySelector(".pw").value = op.power;
-      grid.querySelector(".dpiWrap").style.display = op.type === "engrave" ? "" : "none";
-      grid.querySelector(".freqWrap").style.display = op.type === "cut" ? "" : "none";
-      grid.querySelector(".dpi").value = op.dpi || "";
-      grid.querySelector(".freq").value = op.freq || "";
-    }
-    opSel.onchange = apply;
-    const firstEng = m.operations.findIndex(o => o.type === "engrave");
-    opSel.value = firstEng >= 0 ? String(firstEng) : "ignore";
-    apply();
-    box.appendChild(div);
-  });
-}
-
-// ---------- send ----------
+// ---------- send (single operation over the whole artwork) ----------
 $("#sendBtn").onclick = async () => {
-  const m = currentMaterial();
-  if (!m) { alert("Choose a material first."); return; }
-  const assignments = [];
-  document.querySelectorAll(".layer").forEach(div => {
-    const opSel = div.querySelector(".opsel");
-    if (!opSel || opSel.value === "ignore") return;
-    const op = m.operations[+opSel.value];
-    const L = state.session.layers[+div.dataset.i];
-    assignments.push({
-      hex: L.hex, rgb: L.rgb, op: op.type, label: op.label,
-      speed: +div.querySelector(".sp").value, power: +div.querySelector(".pw").value,
-      dpi: +div.querySelector(".dpi").value || undefined,
-      freq: +div.querySelector(".freq").value || undefined,
-    });
-  });
-  if (!assignments.length) { alert("Assign at least one colour to cut or engrave."); return; }
-
+  const op = currentOp();
+  if (!op) { alert("Choose a material and preset first."); return; }
+  const operation = { type: op.type, speed: op.speed, power: op.power, dpi: op.dpi, freq: op.freq };
   const btn = $("#sendBtn"); btn.disabled = true; btn.textContent = "Sending…";
   const out = $("#out"); out.classList.add("on"); out.textContent = "working…";
   try {
     const data = await (await fetch("/api/send", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id: state.session.id, host: state.laserHost, material: m.name,
-        assignments, offset_mm: [state.off.x, state.off.y], rotation: state.rot,
-        autofocus: false,
+        id: state.session.id, host: state.laserHost, operation,
+        offset_mm: [state.off.x, state.off.y], rotation: state.rot, autofocus: false,
       }),
     })).json();
     if (data.error) out.textContent = "ERROR: " + data.error;
-    else {
-      const lines = data.jobs.map(j => j.skipped
-        ? `· ${j.title}: SKIPPED (${j.skipped})`
-        : `· ${j.title}: ${j.bytes} bytes → SENT`);
-      out.textContent = "Sent to " + data.host + " — press GO on the machine per job\n" + lines.join("\n");
-    }
+    else out.textContent = `Sent to ${data.host} — press GO on the machine\n· ${data.jobs[0].title}: ${data.jobs[0].bytes} bytes → SENT`;
   } catch (e) { out.textContent = "ERROR: " + e.message; }
-  btn.disabled = false; btn.textContent = "Send to laser";
+  btn.disabled = false; btn.textContent = "Send";
 };
 
 boot();
