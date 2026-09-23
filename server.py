@@ -200,22 +200,25 @@ class Handler(BaseHTTPRequestHandler):
             R = 0
         rw, rh = (cw, ch) if R in (0, 180) else (ch, cw)
 
-        # --- HARD bed-boundary guard (refuse jobs that would exceed the table) ---
-        max_w = mc["usable_w_mm"] - mc["margin_mm"]
-        max_h = mc["usable_h_mm"] - mc["margin_mm"]
+        # --- HARD safety-boundary guard (keep the head off the rails) ---
+        safety = mc.get("safety_mm", mc.get("margin_mm", 3))
+        min_x = min_y = safety
+        max_x = min(mc["usable_w_mm"], mc["bed_w_mm"] - safety)
+        max_y = min(mc["usable_h_mm"], mc["bed_h_mm"] - safety)
         placement = {
             "content_w_mm": round(rw, 2), "content_h_mm": round(rh, 2),
             "x_mm": round(ox, 2), "y_mm": round(oy, 2),
             "extent_x_mm": round(ox + rw, 2), "extent_y_mm": round(oy + rh, 2),
-            "limit_x_mm": round(max_w, 2), "limit_y_mm": round(max_h, 2),
+            "min_x_mm": round(min_x, 2), "min_y_mm": round(min_y, 2),
+            "limit_x_mm": round(max_x, 2), "limit_y_mm": round(max_y, 2),
             "rotation": R,
         }
-        if ox < 0 or oy < 0 or ox + rw > max_w or oy + rh > max_h:
+        if ox < min_x - 0.01 or oy < min_y - 0.01 or ox + rw > max_x + 0.01 or oy + rh > max_y + 0.01:
             return self._send_json({
-                "error": "OUT OF BOUNDS — job would exceed the bed and hit a wall. "
+                "error": "OUT OF BOUNDS — inside the %g mm safety margin. "
                          "Content %.0f×%.0f mm at (%.0f,%.0f) reaches (%.0f,%.0f); "
-                         "usable limit is (%.0f,%.0f)."
-                         % (rw, rh, ox, oy, ox + rw, oy + rh, max_w, max_h),
+                         "allowed area is (%.0f,%.0f)–(%.0f,%.0f)."
+                         % (safety, rw, rh, ox, oy, ox + rw, oy + rh, min_x, min_y, max_x, max_y),
                 "placement": placement, "blocked": True,
             }, 400)
 

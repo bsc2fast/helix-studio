@@ -115,19 +115,21 @@ function artDims() {
   if (!c) return { w: 0, h: 0 };
   return (state.rot % 180 === 0) ? { w: c.w_mm, h: c.h_mm } : { w: c.h_mm, h: c.w_mm };
 }
-function limits() {
-  const m = state.machine;
-  return { x: m.usable_w_mm - m.margin_mm, y: m.usable_h_mm - m.margin_mm };
+function bounds() {
+  const m = state.machine, s = m.safety_mm != null ? m.safety_mm : (m.margin_mm || 3);
+  return { minX: s, minY: s,
+           maxX: Math.min(m.usable_w_mm, m.bed_w_mm - s),
+           maxY: Math.min(m.usable_h_mm, m.bed_h_mm - s), s };
 }
 function clampOff() {
-  const d = artDims(), L = limits();
-  state.off.x = Math.max(0, Math.min(state.off.x, L.x - d.w));
-  state.off.y = Math.max(0, Math.min(state.off.y, L.y - d.h));
+  const d = artDims(), B = bounds();
+  state.off.x = Math.max(B.minX, Math.min(state.off.x, B.maxX - d.w));
+  state.off.y = Math.max(B.minY, Math.min(state.off.y, B.maxY - d.h));
 }
 function centerArt() {
-  const d = artDims(), m = state.machine;
-  state.off.x = Math.max(0, (m.usable_w_mm - d.w) / 2);
-  state.off.y = Math.max(0, (m.usable_h_mm - d.h) / 2);
+  const d = artDims(), B = bounds();
+  state.off.x = Math.max(B.minX, (B.minX + B.maxX - d.w) / 2);
+  state.off.y = Math.max(B.minY, (B.minY + B.maxY - d.h) / 2);
   updatePlacement();
 }
 
@@ -146,10 +148,10 @@ function buildBed() {
   cp.appendChild(clipR); defs.appendChild(cp); bed.appendChild(defs);
 
   bed.appendChild(mk("rect", { x: 0, y: 0, width: m.bed_w_mm, height: m.bed_h_mm, fill: "var(--bed)", stroke: "var(--line)", "stroke-width": 1 }));
+  const B = bounds();  // dashed safety boundary = allowed placement area
   bed.appendChild(mk("rect", {
-    x: m.margin_mm, y: m.margin_mm,
-    width: m.usable_w_mm - 2 * m.margin_mm, height: m.usable_h_mm - 2 * m.margin_mm,
-    fill: "none", stroke: "var(--bedline)", "stroke-dasharray": "7 5", "stroke-width": 1,
+    x: B.minX, y: B.minY, width: B.maxX - B.minX, height: B.maxY - B.minY,
+    fill: "none", stroke: "var(--warn, #ffb454)", "stroke-dasharray": "8 6", "stroke-width": 1.5,
   }));
   drawRulers(bed, m);
   bed.appendChild(mk("circle", { cx: 0, cy: 0, r: 6, fill: "var(--accent2)" }));
@@ -213,9 +215,9 @@ function updatePlacement() {
   if (!bedEls || !state.session) return;
   const parsed = !!state.session.content_mm;
   clampOff();
-  const d = artDims(), L = limits();
-  const ok = parsed && state.off.x >= 0 && state.off.y >= 0 &&
-             state.off.x + d.w <= L.x + 0.01 && state.off.y + d.h <= L.y + 0.01;
+  const d = artDims(), B = bounds();
+  const ok = parsed && state.off.x >= B.minX - 0.01 && state.off.y >= B.minY - 0.01 &&
+             state.off.x + d.w <= B.maxX + 0.01 && state.off.y + d.h <= B.maxY + 0.01;
   const stroke = ok ? "var(--accent)" : "var(--danger)";
   const ox = state.off.x, oy = state.off.y;
   // border
@@ -248,7 +250,7 @@ function updatePlacement() {
   const warn = $("#boundsWarn");
   warn.hidden = ok;
   if (!parsed) warn.textContent = "⚠ No printable artwork detected in this PDF.";
-  else if (!ok) warn.textContent = `⚠ Out of bounds — exceeds usable ${L.x.toFixed(0)}×${L.y.toFixed(0)} mm. Sending disabled.`;
+  else if (!ok) warn.textContent = `⚠ Inside the ${B.s} mm safety margin. Move the artwork within the dashed boundary. Sending disabled.`;
   $("#sendBtn").disabled = !(ok && currentOp());
 }
 

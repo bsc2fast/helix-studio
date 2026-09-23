@@ -6,5 +6,6 @@
   "usable_w_mm": 605.0,
   "usable_h_mm": 450.0,
   "margin_mm": 3.0,
+  "safety_mm": 10.0,
   "origin": "top-left"
 }
