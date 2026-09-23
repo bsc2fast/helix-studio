@@ -23,15 +23,31 @@ async function boot() {
   state.laserHost = cfg.laser_host;
   $("#laserPill").innerHTML = "laser <b>" + cfg.laser_host + "</b>";
   const m = cfg.machine;
-  const bed = $("#bed");
-  bed.setAttribute("viewBox", `0 0 ${m.bed_w_mm} ${m.bed_h_mm}`);
-  bed.style.aspectRatio = `${m.bed_w_mm} / ${m.bed_h_mm}`;
+  $("#bed").setAttribute("viewBox", `0 0 ${m.bed_w_mm} ${m.bed_h_mm}`);
+  buildBed();
+  fitBed();
 
   const mat = await (await fetch("/api/materials")).json();
   state.materials = mat.materials;
   const sel = $("#material");
   mat.materials.forEach(mm => sel.appendChild(new Option(mm.name, mm.name)));
 }
+
+// size the bed SVG to fill its container while preserving the bed aspect
+// (exact 1:1 viewBox mapping keeps drag math simple)
+function fitBed() {
+  const m = state.machine; if (!m) return;
+  const wrap = document.querySelector(".bedwrap");
+  const pad = 48;
+  const availW = wrap.clientWidth - pad, availH = wrap.clientHeight - pad;
+  const A = m.bed_w_mm / m.bed_h_mm;
+  let w = availW, h = w / A;
+  if (h > availH) { h = availH; w = h * A; }
+  const bed = $("#bed");
+  bed.style.width = Math.max(50, w) + "px";
+  bed.style.height = Math.max(50, h) + "px";
+}
+window.addEventListener("resize", fitBed);
 
 // ---------- import ----------
 const drop = $("#drop"), fileInput = $("#file");
@@ -53,13 +69,15 @@ async function importPdf(file) {
   if (data.error) { drop.innerHTML = "<p class='warn'>" + data.error + "</p>"; return; }
   state.session = data;
   state.rot = 0;
-  drop.style.display = "none";
-  $("#workspace").hidden = false;
+  $("#drop").hidden = true;
+  $("#preHint").hidden = true;
   $("#pagePill").hidden = false;
   $("#pagePill").textContent = `${data.info.width_mm} × ${data.info.height_mm} mm`;
   $("#resetBtn").hidden = false;
+  $("#placeSection").hidden = false;
   $("#layersSection").hidden = !data.layers.length;
-  buildBed();
+  $("#sendSection").hidden = false;
+  if (bedEls) { bedEls.art.hidden = false; bedEls.lbl.hidden = false; }
   centerArt();
   renderLayers();
 }
@@ -100,9 +118,9 @@ function buildBed() {
     fill: "none", stroke: "var(--bedline)", "stroke-dasharray": "7 5", "stroke-width": 1,
   }));
   bed.appendChild(mk("circle", { cx: 0, cy: 0, r: 7, fill: "var(--accent2)" }));
-  const art = mk("rect", { class: "art", rx: 2, "stroke-width": 2 });
+  const art = mk("rect", { class: "art", rx: 2, "stroke-width": 2, hidden: "hidden" });
   bed.appendChild(art);
-  const lbl = mk("text", { "font-size": 22, "text-anchor": "middle", fill: "var(--ink)" });
+  const lbl = mk("text", { "font-size": 22, "text-anchor": "middle", fill: "var(--ink)", hidden: "hidden" });
   bed.appendChild(lbl);
   bedEls = { art, lbl };
   attachDrag(art);
