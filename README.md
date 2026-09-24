@@ -124,6 +124,13 @@ cp config.example.json config.json     # Windows: copy config.example.json confi
 leave out keeps the shipped default. **Find your laser's IP** on the machine's
 own control panel, under its network/TCP-IP settings.
 
+Helix Studio also writes a `prefs.json` beside it — the setup you were last
+working in (material, thickness, stock size and where that stock lies on the
+bed, machine, and a laser adopted by a scan), so a new session opens where the
+last one left off. It is a convenience file, not configuration: delete it and
+you only lose the dropdown positions, and `config.json` always wins over it. The
+**preset is deliberately not remembered** — power and speed are chosen per job.
+
 > Start conservative with `usable_*`. Widen it only after you have watched the
 > head travel to that edge and clear the rails.
 
@@ -185,7 +192,9 @@ as environment variables.
    `A1`, `B2`… on the bed (`B2·1`, `B2·2` for copies). **✕** closes a file and
    takes its pages off with it. Overlapping pages turn red and **Send** stays
    disabled until you move them apart.
-3. **Pick material and thickness**, then a **preset**. Engrave presets (`▦`)
+3. **Pick material and thickness**, then a **preset**. The material, thickness
+   and stock size come back as you left them next time you start; the preset
+   does not — choose it for the job in front of you. Engrave presets (`▦`)
    raster the artwork; cut presets (`✂`) follow its vector lines. Presets that
    cannot cut through the thickness you chose are hidden.
 4. **Send.** The job appears on the laser's queue; walk over and press **GO**.
@@ -215,6 +224,7 @@ PDF ──pdftocairo──► preview + raster ──┬──► engrave: 1-bit
 | `data/materials.json` | Epilog Mini/Helix suggested settings, 30 W column |
 | `data/machine.json` | the shipped bed calibration — override it in `config.json` |
 | `web/` | the UI (one HTML file, one JS file, no build step, no dependencies) |
+| `prefs.json` | the last setup, written as you work (gitignored) |
 
 Speed and power are 0–100 %. Engraving is specified in **DPI**, cutting in
 **frequency (Hz)**.

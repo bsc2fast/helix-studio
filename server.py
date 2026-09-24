@@ -13,6 +13,9 @@ sends them to the Epilog Helix.
                                 {doc, page, offset_mm, rotation} — pages may come
                                 from several imported PDFs), or per-colour
                                 assignments; builds & sends (or dry-run)
+  GET  /api/prefs            -> the last setup (material, thickness, sheet + where
+                                it lies, machine, adopted laser), from prefs.json
+  POST /api/prefs            -> merge a few of those keys back into prefs.json
   GET  /api/laser/status     -> {host, online, busy}: is the laser's LPD port up?
   POST /api/laser/scan       -> sweep the local /24s for LPD hosts; adopts the
                                 laser when exactly one answers (or body {host})
@@ -22,6 +25,7 @@ Bound to 127.0.0.1 by default. Depends on: Poppler CLI + Pillow + driver/*.
 
 import argparse
 import json
+import math
 import os
 import shutil
 import sys
@@ -59,6 +63,73 @@ SENDING = threading.Lock()
 TMPDIR = os.path.join(HERE, ".sessions")
 os.makedirs(TMPDIR, exist_ok=True)
 
+# What the app remembers between runs, so a new session starts where the last
+# one left off. It is a convenience file, not configuration: config.json still
+# wins, and deleting prefs.json only costs you the dropdown positions.
+PREFS_PATH = os.path.join(HERE, "prefs.json")
+# key -> (kind, limit). Anything else the UI sends is dropped on the floor.
+PREF_SPEC = {
+    "machine": ("text", 120),      # machine name, as the dropdown shows it
+    "material": ("text", 120),     # material name from materials.json
+    "thickness": ("text", 12),     # the thickness option's value ("3")
+    "sheet": ("text", 40),         # stock size id ("A3|L")
+    "sheet_off": ("xy", None),     # where that sheet lies on the bed, mm
+    "laser_host": ("host", 60),    # the laser adopted by a scan
+}
+
+
+def load_prefs():
+    try:
+        with open(PREFS_PATH) as f:
+            saved = json.load(f)
+        return clean_prefs(saved) if isinstance(saved, dict) else {}
+    except (OSError, ValueError):
+        return {}   # missing or damaged: start fresh rather than fail the app
+
+
+def clean_prefs(patch):
+    """Keep the known keys, in the shapes we expect. The file is written by
+    this app for this app, but it is on disk and hand-editable, so nothing from
+    it is trusted any further than a dropdown value."""
+    out = {}
+    for k, v in patch.items():
+        kind = PREF_SPEC.get(k)
+        if not kind:
+            continue
+        kind, limit = kind
+        if v is None or v == "":
+            out[k] = ""        # an explicit "nothing chosen"
+        elif kind == "text" and isinstance(v, str) and len(v) <= limit:
+            out[k] = v
+        elif kind == "host" and isinstance(v, str) and len(v) <= limit and re.fullmatch(r"[\w.\-:]+", v):
+            out[k] = v
+        elif kind == "xy" and isinstance(v, dict):
+            try:
+                xy = {a: round(float(v.get(a, 0)), 2) for a in ("x", "y")}
+            except (TypeError, ValueError):
+                continue
+            # NaN and inf survive float() but json.dump writes them as bare NaN /
+            # Infinity, which no JSON parser will read back — including the UI's
+            if all(math.isfinite(n) and abs(n) < 10000 for n in xy.values()):
+                out[k] = xy
+    return out
+
+
+def save_prefs(patch):
+    """Merge a patch into prefs.json and write it whole, atomically — a crash
+    mid-write must not leave a half-file that the next start can't read."""
+    prefs = load_prefs()
+    prefs.update(clean_prefs(patch))
+    tmp = PREFS_PATH + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(prefs, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, PREFS_PATH)
+    except OSError as e:
+        print("helix-studio: could not save prefs.json (%s)" % e)
+    return prefs
+
 
 def load_materials():
     with open(os.path.join(HERE, "data", "materials.json")) as f:
@@ -76,6 +147,8 @@ def load_config(argv=None):
         built-in defaults
           <- data/machine.json        (bed calibration shipped with the repo)
           <- config.json              (yours; gitignored, survives a git pull)
+          <- prefs.json               (laser_host only, and only when config.json
+                                       doesn't name one: the laser a scan adopted)
           <- HELIX_* environment vars
           <- command-line flags
 
@@ -94,6 +167,16 @@ def load_config(argv=None):
         cfg["machine"].update(user.pop("machine", {}) or {})
         cfg.update({k: v for k, v in user.items() if not k.startswith("_")})
         cfg["config_path"] = path
+        from_config = set(user)
+    else:
+        from_config = set()
+
+    # a laser adopted by a scan is remembered, but never over an explicit
+    # config.json — editing that file must always win
+    if "laser_host" not in from_config:
+        saved = load_prefs().get("laser_host")
+        if saved:
+            cfg["laser_host"] = saved
 
     if os.environ.get("HELIX_LASER_HOST"): cfg["laser_host"] = os.environ["HELIX_LASER_HOST"]
     if os.environ.get("HELIX_PORT"):       cfg["port"] = int(os.environ["HELIX_PORT"])
@@ -257,6 +340,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_file(os.path.join(HERE, "web", "app.js"), "text/javascript")
         if path == "/api/materials":
             return self._send_json(load_materials())
+        if path == "/api/prefs":
+            return self._send_json(load_prefs())
         if path == "/api/config":
             mc = CFG["machine"]
             return self._send_json({"laser_host": CFG["laser_host"], "machine": mc,
@@ -300,6 +385,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.handle_import()
             if self.path == "/api/send":
                 return self.handle_send()
+            if self.path == "/api/prefs":
+                patch = json.loads(self._read_body().decode() or "{}")
+                return self._send_json(save_prefs(patch if isinstance(patch, dict) else {}))
             if self.path == "/api/laser/scan":
                 return self.handle_scan()
             return self._send_json({"error": "not found"}, 404)
@@ -342,6 +430,7 @@ class Handler(BaseHTTPRequestHandler):
         req = json.loads(self._read_body().decode() or "{}")
         if req.get("host"):
             CFG["laser_host"] = req["host"]
+            save_prefs({"laser_host": CFG["laser_host"]})
             return self._send_json({"host": CFG["laser_host"], "online": laserlink.probe(req["host"])})
         res = laserlink.scan(extra_hosts=[CFG["laser_host"]])
         found = res["found"]
@@ -349,6 +438,7 @@ class Handler(BaseHTTPRequestHandler):
             # the configured laser came back, or exactly one LPD device is on the LAN
             if CFG["laser_host"] not in found:
                 CFG["laser_host"] = found[0]
+                save_prefs({"laser_host": CFG["laser_host"]})
             return self._send_json(dict(res, host=CFG["laser_host"], online=True))
         return self._send_json(dict(res, host=CFG["laser_host"], online=False))
 

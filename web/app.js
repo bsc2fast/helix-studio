@@ -14,7 +14,27 @@ const state = {
   laser: "checking",   // checking | online | busy | offline | scanning
   sending: false,
   vb: { w: 1, h: 1 }, page: { w: 0, h: 0 },
+  prefs: {},          // last setup, kept in prefs.json next to the server
 };
+
+// ---------- last setup (server-side prefs.json, so it survives the browser) ----------
+// Material, thickness, stock size and where the stock lies are remembered as
+// they change; the next session opens on the same setup. The preset is NOT
+// remembered on purpose — power and speed are chosen per job, deliberately.
+let prefsTimer = null;
+function savePrefs(patch) {
+  Object.assign(state.prefs, patch);
+  clearTimeout(prefsTimer);   // dragging the sheet fires on every pointermove
+  prefsTimer = setTimeout(() => {
+    fetch("/api/prefs", { method: "POST", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify(state.prefs) }).catch(() => {});
+  }, 400);
+}
+// set a <select> to a saved value, but only if that option still exists
+function restore(sel, value) {
+  if (value && [...sel.options].some(o => o.value === value)) { sel.value = value; return true; }
+  return false;
+}
 
 // ---------- theme ----------
 function applyTheme(t) {
@@ -61,7 +81,11 @@ function fitBar() { ["#machine", "#material", "#thickness", "#sheet", "#preset"]
 // ---------- boot ----------
 async function boot() {
   try { applyTheme(localStorage.getItem("hs-theme") || "dark"); } catch (e) { applyTheme("dark"); }
-  const cfg = await (await fetch("/api/config")).json();
+  const [cfg, prefs] = await Promise.all([
+    (await fetch("/api/config")).json(),
+    fetch("/api/prefs").then(r => r.json()).catch(() => ({})),
+  ]);
+  state.prefs = prefs || {};
   state.machine = cfg.machine;
   state.laserHost = cfg.laser_host;
   renderLaser();
@@ -69,6 +93,8 @@ async function boot() {
   const msel = $("#machine");
   (cfg.machines || [cfg.machine]).forEach(mm => msel.appendChild(new Option(mm.name, mm.name)));
   msel.value = cfg.machine.name;
+  restore(msel, state.prefs.machine);
+  msel.onchange = () => savePrefs({ machine: msel.value });
   const m = cfg.machine;
   state.vb = { w: m.bed_w_mm + GUT + PAD, h: m.bed_h_mm + GUT + PAD };
   $("#bed").setAttribute("viewBox", `${-GUT} ${-GUT} ${state.vb.w} ${state.vb.h}`);
@@ -80,6 +106,11 @@ async function boot() {
   state.materials = mat.materials;
   const sel = $("#material");
   mat.materials.forEach(mm => sel.appendChild(new Option(mm.name, mm.name)));
+  // pick up where the last session left off — presets are then listed for it,
+  // but none is selected: that choice is made per job
+  const had = restore(sel, state.prefs.material);
+  restore($("#thickness"), state.prefs.thickness);
+  if (had) renderPresets();
   fitBar();
 }
 
@@ -213,10 +244,20 @@ function renderSheetOptions() {
     list.forEach(s => og.appendChild(new Option(s.label, s.id)));
     sel.appendChild(og);
   });
-  let saved = "";
-  try { saved = localStorage.getItem("hs-sheet") || ""; } catch (e) {}
-  sel.value = [...sel.options].some(o => o.value === saved) ? saved : "";
-  try { Object.assign(state.sheetOff, JSON.parse(localStorage.getItem("hs-sheet-off")) || {}); } catch (e) {}
+  // the sheet used to live in localStorage; carry that over once, then forget it
+  let old = null;
+  try {
+    if (localStorage.getItem("hs-sheet") && !state.prefs.sheet) {
+      old = { sheet: localStorage.getItem("hs-sheet"),
+              sheet_off: JSON.parse(localStorage.getItem("hs-sheet-off") || "null") || undefined };
+      savePrefs(old);
+      Object.assign(state.prefs, old);
+    }
+    localStorage.removeItem("hs-sheet"); localStorage.removeItem("hs-sheet-off");
+  } catch (e) {}
+  restore(sel, state.prefs.sheet);
+  const off = state.prefs.sheet_off;
+  if (off) Object.assign(state.sheetOff, { x: +off.x || 0, y: +off.y || 0 });
 }
 function currentSheet() {
   const v = $("#sheet").value;
@@ -234,10 +275,7 @@ function sheetBox() {
   return { ...s, x: o.x, y: o.y };
 }
 function saveSheet() {
-  try {
-    localStorage.setItem("hs-sheet", $("#sheet").value);
-    localStorage.setItem("hs-sheet-off", JSON.stringify(state.sheetOff));
-  } catch (e) {}
+  savePrefs({ sheet: $("#sheet").value, sheet_off: { ...state.sheetOff } });
 }
 function drawSheet() {
   if (!bedEls) return;
@@ -825,8 +863,8 @@ function renderPresets() {
   fitSelect(sel);
   highlight(); updatePlacement();
 }
-$("#material").onchange = renderPresets;
-$("#thickness").onchange = renderPresets;
+$("#material").onchange = () => { savePrefs({ material: $("#material").value }); renderPresets(); };
+$("#thickness").onchange = () => { savePrefs({ thickness: $("#thickness").value }); renderPresets(); };
 $("#preset").onchange = () => { highlight(); updatePlacement(); };
 
 // highlight artwork by selected preset: cut → red vector lines, engrave → green wash

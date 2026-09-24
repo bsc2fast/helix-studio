@@ -7,3 +7,5 @@ config.json
 site/node_modules/
 site/.wrangler/
 site/dev.log
+
+prefs.json
