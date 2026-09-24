@@ -111,8 +111,9 @@
   .thumb:not(.on) .tframe{opacity:.6}
   .tfoot{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:6px;
     font-size:11.5px;color:var(--muted)}
+  .tfoot span{white-space:nowrap}
   .thumb.on .tfoot span{color:var(--ink);font-weight:600}
-  .tbtn{border-radius:999px;padding:3px 10px;font-size:11.5px}
+  .tbtn{border-radius:999px;padding:3px 10px;font-size:11.5px;white-space:nowrap}
   .thumb:not(.on) .tbtn{background:var(--accent2);border-color:var(--accent2);color:#fff}
   .thumb.busy .tbtn,.thumb.blank .tbtn{background:none;border-color:var(--line);color:var(--muted);pointer-events:none}
 
