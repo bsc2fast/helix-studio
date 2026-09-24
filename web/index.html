@@ -11,6 +11,10 @@
     --danger:#ff6b6b; --warn:#ffb454; --bed:#0c0d11; --bedline:#3a3f50;
     --bar:#0f1420; --barline:#2a3040; --shadow:0 10px 34px rgba(0,0,0,.45);
     --ctl-h:34px;   /* one height for every app-bar control */
+    /* The bed is centred between two gutters of equal width, and the page rail
+       floats over the left one: showing or hiding the rail then never moves the
+       bed. The gutter is as wide as the widest thing that sits in it. */
+    --rail-w:186px; --ctrl-w:216px; --gutter:240px;
     --sheet:rgba(180,140,255,.12); --sheetline:#b18cff;   /* the stock sheet on the bed */
   }
   html[data-theme="light"]{
@@ -84,7 +88,7 @@
   /* ---- bed canvas ---- */
   main{flex:1;position:relative;display:flex;min-height:0}
   .bedwrap{flex:1;position:relative;display:flex;align-items:center;justify-content:center;
-    padding:24px;min-width:0}
+    padding:24px var(--gutter);min-width:0}
   #bed{background:var(--bed);border:1px solid var(--line);border-radius:12px;
     box-shadow:var(--shadow);touch-action:none;user-select:none;display:block}
   #bed .art{cursor:grab}
@@ -93,12 +97,25 @@
   #bed .sheetrect{cursor:move}
 
   /* ---- page rail (multi-page PDFs) ---- */
-  .rail{width:156px;flex-shrink:0;display:flex;flex-direction:column;min-height:0;
+  .rail{position:absolute;left:0;top:0;bottom:0;z-index:2;width:var(--rail-w);
+    display:flex;flex-direction:column;min-height:0;
     background:var(--panel);border-right:1px solid var(--line)}
   .railhead{padding:12px 12px 8px;display:flex;flex-direction:column;gap:7px}
   .railhead span{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
   .railhead button{border-radius:999px;padding:5px 10px;font-size:12px}
-  .thumbs{flex:1;overflow:auto;padding:4px 12px 14px;display:flex;flex-direction:column;gap:10px}
+  .railbtns{display:flex;gap:6px}
+  .railbtns button{flex:1;padding:5px 8px}
+  .thumbs{flex:1;overflow:auto;padding:4px 12px 14px;display:flex;flex-direction:column;gap:16px}
+  /* one group per imported PDF, its name pinned above its pages */
+  .docgrp{display:flex;flex-direction:column;gap:10px}
+  .dochead{display:flex;align-items:center;gap:4px;position:sticky;top:-4px;z-index:1;
+    background:var(--panel);padding:5px 0 3px}
+  .dochead b{flex:1;min-width:0;font-size:11.5px;font-weight:600;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dochead .letter{flex:none;color:var(--accent2)}   /* the file's letter never steals name width */
+  .docx{border:0;background:none;color:var(--muted);cursor:pointer;flex-shrink:0;
+    font-size:13px;line-height:1;padding:3px 5px;border-radius:6px}
+  .docx:hover{color:var(--danger);background:var(--panel2)}
   .thumb{border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:6px;
     cursor:default;transition:border-color .12s, box-shadow .12s}
   .thumb.on{border-color:var(--accent);cursor:pointer;
@@ -111,11 +128,19 @@
   .thumb:not(.on) .tframe{opacity:.6}
   .tfoot{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:6px;
     font-size:11.5px;color:var(--muted)}
-  .tfoot span{white-space:nowrap}
+  .tfoot span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
   .thumb.on .tfoot span{color:var(--ink);font-weight:600}
-  .tbtn{border-radius:999px;padding:3px 10px;font-size:11.5px;white-space:nowrap}
+  .tbtn{border-radius:999px;padding:3px 10px;font-size:11.5px;white-space:nowrap;flex-shrink:0}
   .thumb:not(.on) .tbtn{background:var(--accent2);border-color:var(--accent2);color:#fff}
   .thumb.busy .tbtn,.thumb.blank .tbtn{background:none;border-color:var(--line);color:var(--muted);pointer-events:none}
+
+  /* a narrow window can't spare two full gutters: keep the rail's width on both
+     sides, and let the controls float over the bed as they did before */
+  @media (max-width:1240px){ :root{--gutter:var(--rail-w)} }
+
+  .addhint{position:absolute;inset:24px;display:grid;place-items:center;pointer-events:none;z-index:4}
+  .addhint .box{border:2px dashed var(--accent2);border-radius:14px;padding:22px 30px;font-size:15px;
+    background:color-mix(in srgb, var(--panel) 85%, transparent)}
 
   .drop{position:absolute;inset:24px;display:flex;flex-direction:column;
     align-items:center;justify-content:center;cursor:pointer;border-radius:12px;color:var(--muted)}
@@ -127,7 +152,7 @@
 
   /* ---- floating controls (bottom-right) ---- */
   /* a column of separate cards: Material (the stock) above Artwork (the pages) */
-  .floating{position:absolute;right:18px;bottom:18px;width:216px;
+  .floating{position:absolute;right:18px;bottom:18px;width:var(--ctrl-w);
     max-height:calc(100% - 36px);overflow:auto;z-index:2;
     display:flex;flex-direction:column;gap:12px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
@@ -198,7 +223,10 @@
   <aside class="rail" id="rail" hidden>
     <div class="railhead">
       <span id="railCount"></span>
-      <button type="button" id="includeAll">Include all pages</button>
+      <div class="railbtns">
+        <button type="button" id="includeAll">Include all</button>
+        <button type="button" id="addPdf" title="Add another PDF">+ PDF</button>
+      </div>
     </div>
     <div class="thumbs" id="thumbs"></div>
   </aside>
@@ -206,12 +234,14 @@
     <svg id="bed" preserveAspectRatio="xMidYMid meet"></svg>
     <div class="drop" id="drop">
       <div class="box">
-        <p class="big">Drop a PDF here</p>
-        <p class="hint">or click to choose · your coaster / panel artwork</p>
+        <p class="big" id="dropBig">Drop PDFs here</p>
+        <p class="hint" id="dropHint">or click to choose · one file or several</p>
       </div>
-      <input type="file" id="file" accept="application/pdf" hidden />
     </div>
+    <!-- shown while a file is dragged over the window with pages already on the bed -->
+    <div class="addhint" id="addHint" hidden><div class="box">Drop to add another PDF</div></div>
   </div>
+  <input type="file" id="file" accept="application/pdf" multiple hidden />
 
   <div class="floating" id="controls" hidden>
     <section class="card" id="sheetSection" hidden>

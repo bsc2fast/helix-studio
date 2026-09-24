@@ -163,7 +163,8 @@ as environment variables.
 
 1. **Drop a PDF** onto the page (or click to choose one). Vector artwork works
    best; the page is cropped to its ink, so whitespace around the design is
-   ignored.
+   ignored. Drop **several PDFs**, or add more later with **+ PDF** — they all
+   stay open, listed down the left, and one job can mix pages from any of them.
 2. **Place it.** Drag the artwork around the bed picture, or type X/Y in mm.
    X/Y is measured from the laser's home corner (top-left). `Rotate` turns it
    in 90° steps, `Center` centres it in the safe area. The outline is green
@@ -174,10 +175,13 @@ as environment variables.
    card, to match where the sheet really lies. `Rotate` on either card is only
    enabled when the turned sheet or artwork still fits from where it sits — the
    card says how far to move it when it doesn't.
-   **Multi-page PDFs** list every page down the left. Page 1 starts on the bed;
-   **Include** puts another page on in the first free spot, so several pages
-   can be laid out on one larger sheet and sent as one job. Overlapping pages
-   turn red and **Send** stays disabled until you move them apart.
+   **The page list** down the left shows every page of every open PDF, grouped
+   by file. Page 1 of each file starts on the bed; **Include** puts another page
+   on in the first free spot, so pages from one file or several can be laid out
+   on one larger sheet and sent as a single job. With more than one file open,
+   each is lettered and its pages are labelled `A1`, `B2`… on the bed. **✕**
+   closes a file and takes its pages off with it. Overlapping pages turn red and
+   **Send** stays disabled until you move them apart.
 3. **Pick material and thickness**, then a **preset**. Engrave presets (`▦`)
    raster the artwork; cut presets (`✂`) follow its vector lines. Presets that
    cannot cut through the thickness you chose are hidden.
@@ -213,11 +217,14 @@ Speed and power are 0–100 %. Engraving is specified in **DPI**, cutting in
 **frequency (Hz)**.
 
 The REST API is small enough to drive from a script: `POST /api/import` with
-raw PDF bytes (returns the page count and page 1), `GET /api/page/<id>/<n>` for
-any other page, then `POST /api/send` with an `operation` and the placed pages
-as `items: [{page, offset_mm: [x, y], rotation}]` — or a single `offset_mm` +
-`rotation` for page 1, or a list of per-colour `assignments`. Placed pages must
-not overlap; they go to the laser as one job.
+raw PDF bytes (returns an id, the page count and page 1; an `X-Filename` header
+names it), `GET /api/page/<id>/<n>` for any other page, then `POST /api/send`
+with an `operation` and the placed pages as
+`items: [{doc, page, offset_mm: [x, y], rotation}]` — or a single `offset_mm` +
+`rotation` for page 1, or a list of per-colour `assignments`. Each item's `doc`
+is the id of any import, so one job can carry pages from several PDFs; leave it
+out and the top-level `id` is used. Placed pages must not overlap; they go to
+the laser as one job.
 
 ---
 
@@ -241,7 +248,8 @@ the way.
 
 **"No printable artwork detected"** — the first page rendered blank. Check the
 PDF isn't a single huge white image. For a multi-page PDF, include the page that
-has the artwork from the page list on the left.
+has the artwork from the page list on the left; pages that render blank are
+marked *Blank* there and can't be put on the bed.
 
 **A cut preset does nothing** — cutting follows *vector* paths. A PDF that
 contains only a photo or a flattened bitmap has none; export vectors from your

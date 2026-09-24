@@ -9,8 +9,10 @@ sends them to the Epilog Helix.
   GET  /api/page/<id>/<n>    -> page n: preview url, content bbox, cut-line vectors
   GET  /preview/<id>/<n>.png -> page n rendered (/preview/<id>.png = page 1)
   GET  /thumb/<id>/<n>.png   -> small render of page n for the page rail
-  POST /api/send             -> one operation over the placed pages ("items"),
-                                or per-colour assignments; builds & sends (or dry-run)
+  POST /api/send             -> one operation over the placed pages ("items", each
+                                {doc, page, offset_mm, rotation} — pages may come
+                                from several imported PDFs), or per-colour
+                                assignments; builds & sends (or dry-run)
   GET  /api/laser/status     -> {host, online, busy}: is the laser's LPD port up?
   POST /api/laser/scan       -> sweep the local /24s for LPD hosts; adopts the
                                 laser when exactly one answers (or body {host})
@@ -25,6 +27,7 @@ import shutil
 import sys
 import threading
 import re
+import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
@@ -47,7 +50,9 @@ MAX_UPLOAD = 64 * 1024 * 1024
 
 CFG = {}        # filled by load_config() before the server starts
 
-SESSIONS = {}   # id -> {pdf_path, info, pages: {n: page geometry}, thumbs: {n: png}}
+# one entry per imported PDF; several may be open at once and a single job can
+# mix pages from any of them
+SESSIONS = {}   # id -> {pdf_path, name, info, pages: {n: page geometry}, thumbs: {n: png}}
 # held for the length of an LPD send: the laser takes one connection at a time,
 # so the status probe must not knock on port 515 mid-job
 SENDING = threading.Lock()
@@ -312,14 +317,23 @@ class Handler(BaseHTTPRequestHandler):
         with open(pdf_path, "wb") as f:
             f.write(data)
         info = pdfjob.pdf_info(pdf_path)
-        s = SESSIONS[sid] = {"pdf_path": pdf_path, "info": info, "pages": {}, "thumbs": {}}
+        s = SESSIONS[sid] = {"pdf_path": pdf_path, "name": self._upload_name(),
+                             "info": info, "pages": {}, "thumbs": {}}
         pg = load_page(s, 1)
         # page 1 flattened into the top level (the original single-page shape),
         # plus "pages" so the UI knows to show the page rail
         out = page_json(sid, 1, pg)
-        out.update({"id": sid, "info": info, "pages": info["pages"],
+        out.update({"id": sid, "name": s["name"], "info": info, "pages": info["pages"],
                     "preview_px": pg["rgb"].size, "layers": pdfjob.detect_layers(pg["rgb"])})
         return self._send_json(out)
+
+    def _upload_name(self):
+        """The dropped file's name, sent in X-Filename (percent-encoded). Only
+        ever shown back to the user, so it is reduced to a bare file name."""
+        raw = urllib.parse.unquote(self.headers.get("X-Filename", "") or "")
+        name = os.path.basename(raw.replace("\\", "/")).strip()
+        name = "".join(ch for ch in name if ch.isprintable() and ch not in '"<>')
+        return name[:120] or "document.pdf"
 
     def handle_scan(self):
         """Body {} sweeps the network; body {"host": ip} adopts that host (the
@@ -340,10 +354,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_send(self):
         req = json.loads(self._read_body().decode())
-        sid = req["id"]
-        s = SESSIONS.get(sid)
-        if not s:
-            return self._send_json({"error": "unknown session"}, 404)
+        sid = req.get("id")
         host = req.get("host", CFG["laser_host"])
         autofocus = bool(req.get("autofocus", False))
         dry_run = bool(req.get("dry_run", False))
@@ -353,14 +364,19 @@ class Handler(BaseHTTPRequestHandler):
         max_x = min(mc["usable_w_mm"], mc["bed_w_mm"] - safety)
         max_y = min(mc["usable_h_mm"], mc["bed_h_mm"] - safety)
 
-        # "items" places several pages on one bed; the older single-page shape
-        # (offset_mm + rotation, page 1) is one item
+        # "items" places several pages on one bed; each may name its own "doc"
+        # (an imported PDF), so one job can mix pages from several files. The
+        # older single-page shape (offset_mm + rotation, page 1 of "id") is one item.
         items = req.get("items") or [{"page": 1, "offset_mm": req.get("offset_mm", [0, 0]),
                                       "rotation": req.get("rotation", 0)}]
         placed = []
         for it in items:
+            did = it.get("doc") or sid
+            ds = SESSIONS.get(did)
+            if not ds:
+                return self._send_json({"error": "unknown session"}, 404)
             n = int(it.get("page", 1))
-            bbox = load_page(s, n)["bbox"]
+            bbox = load_page(ds, n)["bbox"]
             if not bbox:
                 return self._send_json({"error": "page %d appears blank" % n}, 400)
             bx0, by0, bx1, by1 = bbox
@@ -371,11 +387,23 @@ class Handler(BaseHTTPRequestHandler):
                 R = 0
             rw, rh = (cw, ch) if R in (0, 180) else (ch, cw)
             ox, oy = float(it["offset_mm"][0]), float(it["offset_mm"][1])
-            placed.append({"page": n, "bbox": bbox, "cw": cw, "ch": ch, "R": R,
+            placed.append({"doc": did, "s": ds, "key": (did, n),
+                           "page": n, "bbox": bbox, "cw": cw, "ch": ch, "R": R,
                            "ox": ox, "oy": oy, "rw": rw, "rh": rh})
+        if not placed:
+            return self._send_json({"error": "no pages on the bed"}, 400)
+        s = placed[0]["s"]
+
+        # with pages from more than one file on the bed, "page 3" is ambiguous:
+        # say which file each one came from
+        many_docs = len({p["doc"] for p in placed}) > 1
+        def where(p):
+            if not many_docs:
+                return "page %d" % p["page"]
+            return "%s page %d" % (p["s"].get("name") or p["doc"], p["page"])
 
         placements = [{
-            "page": p["page"],
+            "doc": p["doc"], "name": p["s"].get("name"), "page": p["page"],
             "content_w_mm": round(p["rw"], 2), "content_h_mm": round(p["rh"], 2),
             "x_mm": round(p["ox"], 2), "y_mm": round(p["oy"], 2),
             "extent_x_mm": round(p["ox"] + p["rw"], 2), "extent_y_mm": round(p["oy"] + p["rh"], 2),
@@ -393,7 +421,7 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "OUT OF BOUNDS — %sinside the %g mm safety margin. "
                              "Content %.0f×%.0f mm at (%.0f,%.0f) reaches (%.0f,%.0f); "
                              "allowed area is (%.0f,%.0f)–(%.0f,%.0f)."
-                             % ("page %d is " % p["page"] if len(placed) > 1 else "",
+                             % ("%s is " % where(p) if len(placed) > 1 else "",
                                 safety, rw, rh, ox, oy, ox + rw, oy + rh, min_x, min_y, max_x, max_y),
                     "placement": placement, "blocked": True,
                 }, 400)
@@ -402,8 +430,8 @@ class Handler(BaseHTTPRequestHandler):
             for b in placed[i + 1:]:
                 if _overlap((a["ox"], a["oy"], a["rw"], a["rh"]), (b["ox"], b["oy"], b["rw"], b["rh"])):
                     return self._send_json({
-                        "error": "OVERLAP — page %d and page %d overlap on the bed; move them apart."
-                                 % (a["page"], b["page"]),
+                        "error": "OVERLAP — %s and %s overlap on the bed; move them apart."
+                                 % (where(a), where(b)),
                         "placement": placement, "blocked": True,
                     }, 400)
 
@@ -419,13 +447,13 @@ class Handler(BaseHTTPRequestHandler):
                 # between pages cost nothing and it stays a single raster part.
                 masks, renders = [], {}
                 for p in placed:
-                    if p["page"] not in renders:
-                        rgb = pdfjob.render_rgb(s["pdf_path"], dpi=dpi, page=p["page"])
-                        renders[p["page"]] = pdfjob.raster_from_colors(rgb, colors=None)  # all ink
+                    if p["key"] not in renders:
+                        rgb = pdfjob.render_rgb(p["s"]["pdf_path"], dpi=dpi, page=p["page"])
+                        renders[p["key"]] = pdfjob.raster_from_colors(rgb, colors=None)  # all ink
                     bx0, by0, bx1, by1 = p["bbox"]
                     cx0 = int(round(bx0 / 25.4 * dpi)); cy0 = int(round(by0 / 25.4 * dpi))
                     cx1 = int(round(bx1 / 25.4 * dpi)); cy1 = int(round(by1 / 25.4 * dpi))
-                    masks.append((p, _rot_image(renders[p["page"]].crop((cx0, cy0, cx1, cy1)), p["R"])))
+                    masks.append((p, _rot_image(renders[p["key"]].crop((cx0, cy0, cx1, cy1)), p["R"])))
                 ux = min(p["ox"] for p in placed)
                 uy = min(p["oy"] for p in placed)
                 # offsets via the driver's own mm->units rounding, so every page lands on
@@ -443,13 +471,13 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 polylines, vecs = [], {}
                 for p in placed:
-                    if p["page"] not in vecs:
-                        vecs[p["page"]] = [pl for pls in pdfjob.extract_vectors(
-                            s["pdf_path"], page=p["page"]).values() for pl in pls]
+                    if p["key"] not in vecs:
+                        vecs[p["key"]] = [pl for pls in pdfjob.extract_vectors(
+                            p["s"]["pdf_path"], page=p["page"]).values() for pl in pls]
                     bx0, by0 = p["bbox"][0], p["bbox"][1]
                     polylines.extend([[(lambda rx, ry: (rx + p["ox"], ry + p["oy"]))(
                                            *_rot_point(x - bx0, y - by0, p["R"], p["cw"], p["ch"]))
-                                       for (x, y) in pl] for pl in vecs[p["page"]]])
+                                       for (x, y) in pl] for pl in vecs[p["key"]]])
                 if not polylines:
                     return self._send_json({"error": "no vector lines found to cut"}, 400)
                 part = epilog.VectorPart(polylines, power=op["power"], speed=op["speed"],
@@ -465,6 +493,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # ---- per-colour assignments: the original single-page path (first item) ----
         p = placed[0]
+        s = p["s"]
         bx0, by0, bx1, by1 = p["bbox"]
         cw, ch, R, ox, oy = p["cw"], p["ch"], p["R"], p["ox"], p["oy"]
         assignments = [a for a in req.get("assignments", []) if a.get("op") in ("engrave", "cut")]

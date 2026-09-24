@@ -5,9 +5,9 @@ const GUT = 40;   // mm gutter (top+left) for rulers
 const PAD = 10;   // mm padding (right+bottom)
 const state = {
   materials: [], machine: null, laserHost: "192.168.1.6",
-  doc: null,          // the imported PDF: {id, pages}
-  pageData: {},       // page n -> {preview, content_mm, vectors, width_mm, height_mm}
-  items: [],          // pages on the bed: {page, pd, off:{x,y}, rot, els}
+  docs: [],           // imported PDFs, in the order they arrived:
+                      //   {id, name, pages, pd: {n -> page geometry}}
+  items: [],          // pages on the bed: {doc, page, pd, off:{x,y}, rot, els}
   active: null,       // the item the Placement panel edits
   sheetOff: { x: 0, y: 0 },   // where the stock sheet sits on the bed (mm)
   laser: "checking",   // checking | online | busy | offline | scanning
@@ -168,8 +168,10 @@ $("#laserPill").onclick = () => { if (state.laser === "offline") scanLaser(); };
 function fitBed() {
   if (!state.machine) return;
   const wrap = document.querySelector(".bedwrap");
-  const pad = 40;
-  const availW = wrap.clientWidth - pad, availH = wrap.clientHeight - pad;
+  // clientWidth includes the gutters, so take the padding off explicitly
+  const cs = getComputedStyle(wrap);
+  const availW = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const availH = wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
   const A = state.vb.w / state.vb.h;
   let w = availW, h = w / A;
   if (h > availH) { h = availH; w = h * A; }
@@ -292,35 +294,75 @@ $("#sheetHome").onclick = () => { state.sheetOff = { x: 0, y: 0 }; moveSheet(); 
 // the floating panel: Material while a sheet is chosen, Placement once a PDF is in
 function syncPanel() {
   $("#sheetSection").hidden = !currentSheet();
-  $("#placeSection").hidden = !state.doc;
-  $("#controls").hidden = !state.doc && !currentSheet();
+  $("#placeSection").hidden = !state.docs.length;
+  $("#controls").hidden = !state.docs.length && !currentSheet();
 }
 
 // ---------- import ----------
-const drop = $("#drop"), fileInput = $("#file");
+// Any number of PDFs can be open at once: drop more on at any time, and pick
+// pages from any of them onto the same bed. Each import is its own server-side
+// session; an item on the bed remembers which one it came from.
+const drop = $("#drop"), fileInput = $("#file"), addHint = $("#addHint");
+const isPdf = f => f && (f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+const hasFiles = e => [...(e.dataTransfer ? e.dataTransfer.types : [])].includes("Files");
+
 drop.onclick = () => fileInput.click();
-fileInput.onchange = e => e.target.files[0] && importPdf(e.target.files[0]);
-["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
-["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
-drop.addEventListener("drop", e => {
-  const f = e.dataTransfer.files[0];
-  if (f && f.type === "application/pdf") importPdf(f);
+$("#addPdf").onclick = () => fileInput.click();
+fileInput.onchange = e => { importFiles(e.target.files); e.target.value = ""; };
+
+// one drop handler for the whole window: the empty state highlights its box,
+// and once pages are on the bed a hint says the file will be added
+document.addEventListener("dragover", e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  if (state.docs.length) addHint.hidden = false; else drop.classList.add("hot");
 });
+document.addEventListener("dragleave", e => { if (!e.relatedTarget) endDrag(); });
+document.addEventListener("drop", e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); endDrag();
+  importFiles(e.dataTransfer.files);
+});
+function endDrag() { addHint.hidden = true; drop.classList.remove("hot"); }
+
+// imported one after another so the page rail (and the bed) fill in order
+function importFiles(list) {
+  const pdfs = [...list].filter(isPdf);
+  if (pdfs.length) pdfs.reduce((p, f) => p.then(() => importPdf(f)), Promise.resolve());
+}
+
+function dropMsg(big, hint, bad) {
+  $("#dropBig").textContent = big;
+  $("#dropHint").textContent = hint;
+  $("#dropHint").className = bad ? "warn" : "hint";
+}
+const DROP_IDLE = ["Drop PDFs here", "or click to choose · one file or several"];
 
 async function importPdf(file) {
-  drop.innerHTML = "<p class='hint'>importing " + file.name + "…</p>";
-  const buf = await file.arrayBuffer();
-  const data = await (await fetch("/api/import", {
-    method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf,
-  })).json();
-  if (data.error) { drop.innerHTML = "<p class='warn'>" + data.error + "</p>"; return; }
-  state.doc = { id: data.id, pages: data.pages || 1 };
-  state.pageData = { 1: data };   // import answers with page 1 already loaded
-  $("#drop").hidden = true;
+  const first = !state.docs.length;
+  if (first) dropMsg("Importing…", file.name);
+  let data;
+  try {
+    const buf = await file.arrayBuffer();
+    data = await (await fetch("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/pdf", "X-Filename": encodeURIComponent(file.name) },
+      body: buf,
+    })).json();
+  } catch (e) { data = { error: e.message }; }
+  if (data.error) {
+    if (first) dropMsg("Couldn't read that PDF", data.error, true);
+    else alert(`${file.name}: ${data.error}`);
+    return;
+  }
+  const doc = { id: data.id, name: data.name || file.name, pages: data.pages || 1, pd: { 1: data } };
+  state.docs.push(doc);   // import answers with page 1 already loaded
+  drop.hidden = true;
+  dropMsg(...DROP_IDLE);
   syncPanel();
   buildRail();
   fitBed();
-  await includePage(1);
+  await includePage(doc.id, 1);
 }
 
 function artTransform(R, ox, oy, x0, y0, cw, ch) {
@@ -331,69 +373,101 @@ function artTransform(R, ox, oy, x0, y0, cw, ch) {
 }
 $("#brand").onclick = () => location.reload();
 
-// ---------- page rail (multi-page PDFs) ----------
-// Every page as a thumbnail down the left; pages on the bed are highlighted
-// and the one being placed is ringed. Include puts a page on the bed in the
-// first free spot; Remove takes it off.
+// ---------- documents and their pages ----------
+const docFor = id => state.docs.find(d => d.id === id) || null;
+// files are lettered in the order they were dropped: page 2 of the second file
+// is "B2" on the bed and in the rail
+const docLetter = id => String.fromCharCode(65 + state.docs.findIndex(d => d.id === id));
+const manyDocs = () => state.docs.length > 1;
+const allPages = () => state.docs.reduce((n, d) => n + d.pages, 0);
+// the rail is worth showing as soon as there is a choice to make
+const showRail = () => manyDocs() || allPages() > 1;
+// what a page is called: "p3" on its own, "B3" once several files are open
+const pageTag = it => manyDocs() ? docLetter(it.doc) + it.page : "p" + it.page;
+const pageName = it => manyDocs() ? pageTag(it) : "page " + it.page;
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+
+// ---------- page rail ----------
+// Every page of every open PDF as a thumbnail down the left, grouped by file;
+// pages on the bed are highlighted and the one being placed is ringed. Include
+// puts a page on the bed in the first free spot; Remove takes it off.
 function buildRail() {
   const rail = $("#rail"), list = $("#thumbs");
-  rail.hidden = state.doc.pages < 2;
+  rail.hidden = !showRail();
   list.innerHTML = "";
   if (rail.hidden) return;
-  for (let n = 1; n <= state.doc.pages; n++) {
-    const card = document.createElement("div");
-    card.className = "thumb"; card.dataset.page = n;
-    card.innerHTML = `<div class="tframe"><img loading="lazy" alt="Page ${n}" src="/thumb/${state.doc.id}/${n}.png"></div>
-      <div class="tfoot"><span>Page ${n}</span><button type="button" class="tbtn"></button></div>`;
-    card.onclick = e => {
-      const it = itemFor(n);
-      if (e.target.closest(".tbtn")) { it ? removeItem(it) : includePage(n); return; }
-      if (it) select(it);
-    };
-    list.appendChild(card);
-  }
+  state.docs.forEach(d => {
+    const grp = document.createElement("div");
+    grp.className = "docgrp";
+    grp.innerHTML = `<div class="dochead">${manyDocs() ? `<b class="letter">${docLetter(d.id)}</b>` : ""}` +
+      `<b title="${esc(d.name)}">${esc(d.name)}</b>` +
+      `<button type="button" class="docx" title="Remove ${esc(d.name)}">✕</button></div>`;
+    grp.querySelector(".docx").onclick = () => removeDoc(d);
+    for (let n = 1; n <= d.pages; n++) {
+      const card = document.createElement("div");
+      card.className = "thumb";
+      card.dataset.doc = d.id; card.dataset.page = n;
+      card.innerHTML = `<div class="tframe"><img loading="lazy" alt="Page ${n}" src="/thumb/${d.id}/${n}.png"></div>
+        <div class="tfoot"><span>Page ${n}</span><button type="button" class="tbtn"></button></div>`;
+      card.onclick = e => {
+        const it = itemFor(d.id, n);
+        if (e.target.closest(".tbtn")) { it ? removeItem(it) : includePage(d.id, n); return; }
+        if (it) select(it);
+      };
+      grp.appendChild(card);
+    }
+    list.appendChild(grp);
+  });
   $("#includeAll").onclick = async () => {
-    for (let n = 1; n <= state.doc.pages; n++) if (!itemFor(n)) await includePage(n);
+    for (const d of state.docs)
+      for (let n = 1; n <= d.pages; n++) if (!itemFor(d.id, n)) await includePage(d.id, n);
   };
   renderRail();
 }
 function renderRail() {
   if ($("#rail").hidden) return;
   document.querySelectorAll("#thumbs .thumb").forEach(card => {
-    const n = +card.dataset.page, it = itemFor(n), btn = card.querySelector(".tbtn");
+    const it = itemFor(card.dataset.doc, +card.dataset.page), btn = card.querySelector(".tbtn");
     card.classList.toggle("on", !!it);
     card.classList.toggle("active", !!it && it === state.active);
     card.classList.toggle("bad", !!it && it.bad);
     if (!card.classList.contains("busy") && !card.classList.contains("blank"))
       btn.textContent = it ? "Remove" : "Include";
   });
-  const on = state.items.length, all = state.doc.pages;
-  $("#railCount").textContent = `${on} of ${all} on the bed`;
+  const on = state.items.length, all = allPages();
+  $("#railCount").textContent = manyDocs()
+    ? `${on} of ${all} · ${state.docs.length} files`
+    : `${on} of ${all} on the bed`;
   $("#includeAll").hidden = on === all;
 }
 
 // ---------- bed items: one per page placed on the bed ----------
-const itemFor = n => state.items.find(it => it.page === n) || null;
+const itemFor = (docId, n) => state.items.find(it => it.doc === docId && it.page === n) || null;
 
-async function includePage(n) {
-  if (itemFor(n)) return select(itemFor(n));
-  const card = document.querySelector(`#thumbs .thumb[data-page="${n}"]`);
-  let pd = state.pageData[n];
+async function includePage(docId, n) {
+  const have = itemFor(docId, n);
+  if (have) return select(have);
+  const d = docFor(docId);
+  if (!d) return;
+  const card = document.querySelector(`#thumbs .thumb[data-doc="${docId}"][data-page="${n}"]`);
+  let pd = d.pd[n];
   if (!pd) {
     if (card) { card.classList.add("busy"); card.querySelector(".tbtn").textContent = "Loading…"; }
-    try { pd = await (await fetch(`/api/page/${state.doc.id}/${n}`)).json(); }
+    try { pd = await (await fetch(`/api/page/${docId}/${n}`)).json(); }
     catch (e) { pd = { error: e.message }; }
     if (card) card.classList.remove("busy");
-    if (pd.error) { renderRail(); alert(`Page ${n}: ${pd.error}`); return; }
-    state.pageData[n] = pd;
+    if (pd.error) { renderRail(); alert(`${d.name} page ${n}: ${pd.error}`); return; }
+    d.pd[n] = pd;
   }
-  // a blank page has nothing to place — except page 1, which keeps the
-  // single-page behaviour of landing on the bed with a "no artwork" warning
-  if (!pd.content_mm && n !== 1) {
+  // a blank page has nothing to place — except the first page of the first
+  // file, which keeps the single-page behaviour of landing on the bed with a
+  // "no artwork" warning
+  if (!pd.content_mm && !(n === 1 && state.docs.length === 1)) {
     if (card) { card.classList.add("blank"); card.querySelector(".tbtn").textContent = "Blank"; }
+    renderRail();
     return;
   }
-  const it = { page: n, pd, off: { x: 0, y: 0 }, rot: 0 };
+  const it = { doc: docId, page: n, pd, off: { x: 0, y: 0 }, rot: 0 };
   it.els = buildItemEls(it);
   state.items.push(it);
   // the first page centres on the stock; later ones take the first free spot
@@ -408,6 +482,21 @@ function removeItem(it) {
   if (state.active) select(state.active); else { updatePlacement(); renderRail(); }
 }
 
+// closing a file takes its pages off the bed with it; with the last one gone
+// the app is back to its empty state, ready for a fresh drop
+function removeDoc(d) {
+  state.items.filter(it => it.doc === d.id).forEach(it => { it.els.g.remove(); it.els.cp.remove(); });
+  state.items = state.items.filter(it => it.doc !== d.id);
+  state.docs = state.docs.filter(o => o !== d);
+  if (state.active && !state.items.includes(state.active))
+    state.active = state.items[state.items.length - 1] || null;
+  if (!state.docs.length) { drop.hidden = false; dropMsg(...DROP_IDLE); }
+  syncPanel();
+  buildRail();
+  fitBed();
+  updatePlacement();
+}
+
 function select(it) {
   state.active = it;
   bedEls.items.appendChild(it.els.g);   // draw (and hit-test) the selected page on top
@@ -415,7 +504,7 @@ function select(it) {
 }
 
 function buildItemEls(it) {
-  const pd = it.pd, id = "clip-p" + it.page;
+  const pd = it.pd, id = `clip-${it.doc}-${it.page}`;
   const cp = mk("clipPath", { id, clipPathUnits: "userSpaceOnUse" });
   const clipR = mk("rect", { x: 0, y: 0, width: 1, height: 1 });
   cp.appendChild(clipR); bedEls.defs.appendChild(cp);
@@ -432,8 +521,8 @@ function buildItemEls(it) {
     cutlines.appendChild(mk("polyline", { points: pl.map(p => p[0] + "," + p[1]).join(" "), fill: "none" })));
   // coloured border on top — pointer-events:all so the whole box is draggable despite fill:none
   const art = mk("rect", { class: "art", rx: 1.5, fill: "none", "pointer-events": "all" });
+  // the label is set in updatePlacement: it changes as files come and go
   const tag = mk("text", { class: "ptag", "font-size": 9, "pointer-events": "none" });
-  tag.textContent = "p" + it.page;
   g.append(engwash, cutlines, art, tag);
   bedEls.items.appendChild(g);
   attachDrag(art, it);
@@ -441,6 +530,7 @@ function buildItemEls(it) {
 }
 
 // ---------- placement helpers ----------
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 function artDims(it) {
   const c = it && it.pd.content_mm;
   if (!c) return { w: 0, h: 0 };
@@ -567,8 +657,8 @@ function attachDrag(art, it) {
 }
 
 function updatePlacement() {
-  if (!bedEls || !state.doc) return;
-  const B = bounds(), S = sheetBox(), multi = state.doc.pages > 1;
+  if (!bedEls || !state.docs.length) return;
+  const B = bounds(), S = sheetBox(), multi = showRail();
   const problems = [], notes = [];
 
   // each page: in bounds? then draw it
@@ -588,12 +678,13 @@ function updatePlacement() {
       E.cutlines.setAttribute("transform", tf);
     }
     E.tag.setAttribute("x", ox + 1); E.tag.setAttribute("y", oy - 3);
+    E.tag.textContent = pageTag(it);
     if (multi) E.tag.removeAttribute("hidden"); else E.tag.setAttribute("hidden", "hidden");
-    if (!c) problems.push(`⚠ No printable artwork detected on page ${it.page}.`);
-    else if (!it.inBounds) problems.push(`⚠ ${multi ? "Page " + it.page + " is i" : "I"}nside the ${B.s} mm safety margin. Move it within the dashed boundary.`);
+    if (!c) problems.push(`⚠ No printable artwork detected on ${pageName(it)}.`);
+    else if (!it.inBounds) problems.push(`⚠ ${multi ? cap(pageName(it)) + " is i" : "I"}nside the ${B.s} mm safety margin. Move it within the dashed boundary.`);
     if (S && c && (ox < S.x - 0.01 || oy < S.y - 0.01 ||
                    ox + d.w > S.x + S.w + 0.01 || oy + d.h > S.y + S.h + 0.01))
-      notes.push(`${multi ? "Page " + it.page : "The artwork"} runs past the ${S.name} sheet.`);
+      notes.push(`${multi ? cap(pageName(it)) : "The artwork"} runs past the ${S.name} sheet.`);
   });
 
   // overlaps between pages: red wash over the shared area, both borders red
@@ -608,7 +699,7 @@ function updatePlacement() {
       a.bad = b.bad = true;
       bedEls.overlaps.appendChild(mk("rect", { x: o.x, y: o.y, width: o.w, height: o.h,
         fill: "var(--danger)", "fill-opacity": 0.35, stroke: "var(--danger)", "stroke-width": 1 }));
-      problems.push(`⚠ Page ${a.page} and page ${b.page} overlap — drag them apart.`);
+      problems.push(`⚠ ${cap(pageName(a))} and ${pageName(b)} overlap — drag them apart.`);
     }
   state.items.forEach(it => {
     it.els.art.setAttribute("stroke", it.bad ? "var(--danger)" : "var(--accent)");
@@ -617,7 +708,9 @@ function updatePlacement() {
 
   // the Artwork card edits the selected page
   const it = state.active;
-  $("#placeWhich").textContent = it && multi ? "· page " + it.page : "";
+  const who = $("#placeWhich");
+  who.textContent = it && multi ? "· " + (manyDocs() ? pageTag(it) : "page " + it.page) : "";
+  who.title = it && manyDocs() ? `page ${it.page} of ${docFor(it.doc).name}` : "";
   ["#offx", "#offy", "#rotateBtn", "#centerBtn"].forEach(s => { $(s).disabled = !it; });
   if (it) {
     const d = artDims(it);
@@ -632,7 +725,8 @@ function updatePlacement() {
     $("#placeInfo").textContent =
       `Artwork ${d.w.toFixed(0)}×${d.h.toFixed(0)} mm at (${it.off.x.toFixed(0)}, ${it.off.y.toFixed(0)}) · ` +
       `reaches (${(it.off.x + d.w).toFixed(0)}, ${(it.off.y + d.h).toFixed(0)}) · bed ${state.machine.bed_w_mm}×${state.machine.bed_h_mm}` +
-      (multi ? ` · ${state.items.length} page${state.items.length === 1 ? "" : "s"} on the bed` : "");
+      (multi ? ` · ${state.items.length} page${state.items.length === 1 ? "" : "s"} on the bed` +
+        (manyDocs() ? ` from ${new Set(state.items.map(o => o.doc)).size} files` : "") : "");
   } else {
     $("#rotWhy").hidden = true;
     $("#placeInfo").textContent = "No pages on the bed — include one from the page list.";
@@ -724,15 +818,18 @@ $("#sendBtn").onclick = async () => {
   const operation = { type: op.type, speed: op.speed, power: op.power, dpi: op.dpi, freq: op.freq };
   const btn = $("#sendBtn"); btn.disabled = true; state.sending = true; $("#sendLbl").textContent = "Sending…";
   const out = $("#out"); out.classList.add("on"); out.textContent = "working…";
-  const items = state.items.map(it => ({ page: it.page, offset_mm: [it.off.x, it.off.y], rotation: it.rot }));
+  const items = state.items.map(it => ({ doc: it.doc, page: it.page,
+                                         offset_mm: [it.off.x, it.off.y], rotation: it.rot }));
+  const files = new Set(items.map(i => i.doc)).size;
   try {
     const data = await (await fetch("/api/send", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: state.doc.id, host: state.laserHost, operation, items, autofocus: false }),
+      body: JSON.stringify({ id: state.docs[0].id, host: state.laserHost, operation, items, autofocus: false }),
     })).json();
     if (data.error) out.textContent = "ERROR: " + data.error;
     else out.textContent = `Sent to ${data.host} — press GO on the machine\n· ${data.jobs[0].title}` +
-      (items.length > 1 ? ` (${items.length} pages)` : "") + `: ${data.jobs[0].bytes} bytes → SENT`;
+      (items.length > 1 ? ` (${items.length} pages${files > 1 ? ` from ${files} files` : ""})` : "") +
+      `: ${data.jobs[0].bytes} bytes → SENT`;
   } catch (e) { out.textContent = "ERROR: " + e.message; }
   state.sending = false; $("#sendLbl").textContent = "Send";
   updatePlacement();
