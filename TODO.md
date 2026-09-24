@@ -4,6 +4,38 @@ Things this project still owes its users, in the order they hurt.
 
 ---
 
+## NEXT: named setups, one file per job
+
+**Where we are.** The app already remembers the *last* setup in `prefs.json`
+(material, thickness, stock size and placement, machine, adopted laser) and
+opens on it. That covers "carry on where I left off"; it does not cover "the
+coaster job" versus "the 3 mm ply signs".
+
+**What to build.** Save the setup under a name and pick it back later, so a
+recurring job is two clicks instead of five dropdowns.
+
+* **What a saved setup holds:** material, thickness, **preset**, stock size and
+  where the stock lies, machine, and a free-text note ("3 mm ply from the blue
+  rack, two passes, focus 0.5 mm down"). The preset belongs here even though it
+  is deliberately *not* in `prefs.json`: loading a named setup is an explicit
+  act, where inheriting last week's power and speed by accident is not.
+* **Where it lives:** `jobs/<name>.json`, one file per setup — hand-editable,
+  diffable, and copyable to the laptop next to the machine. `prefs.json` stays
+  as the implicit "last used", and can remember which named setup was loaded.
+* **UI:** a setup control in the app bar (or beside the preset): choose one to
+  apply it, **Save setup…** to write the current one, ✕ to delete. The bar
+  should show when the live settings have drifted from the setup that was
+  loaded.
+* **Rules:** applying a setup only ever fills in the dropdowns — it never sends.
+  If a setup names something that no longer exists (a material removed from
+  `materials.json`, a stock size too big for the current machine), say so
+  plainly instead of silently skipping it.
+* **Maybe:** remember the page layout too (which pages, copies, positions). That
+  only makes sense for the same PDF, so it would have to key on the file and
+  degrade gracefully — worth its own think, not v1.
+
+---
+
 ## MUST: pace long jobs so the machine can cool down
 
 **The problem.** The tube in this Helix is old. After roughly five minutes of
