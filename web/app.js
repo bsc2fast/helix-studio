@@ -7,7 +7,8 @@ const state = {
   materials: [], machine: null, laserHost: "192.168.1.6",
   docs: [],           // imported PDFs, in the order they arrived:
                       //   {id, name, pages, pd: {n -> page geometry}}
-  items: [],          // pages on the bed: {doc, page, pd, off:{x,y}, rot, els}
+  items: [],          // pages on the bed: {uid, doc, page, pd, off:{x,y}, rot, els}
+                      // the same page may be on the bed several times (copies)
   active: null,       // the item the Placement panel edits
   sheetOff: { x: 0, y: 0 },   // where the stock sheet sits on the bed (mm)
   laser: "checking",   // checking | online | busy | offline | scanning
@@ -380,11 +381,19 @@ const docFor = id => state.docs.find(d => d.id === id) || null;
 const docLetter = id => String.fromCharCode(65 + state.docs.findIndex(d => d.id === id));
 const manyDocs = () => state.docs.length > 1;
 const allPages = () => state.docs.reduce((n, d) => n + d.pages, 0);
-// the rail is worth showing as soon as there is a choice to make
-const showRail = () => manyDocs() || allPages() > 1;
-// what a page is called: "p3" on its own, "B3" once several files are open
-const pageTag = it => manyDocs() ? docLetter(it.doc) + it.page : "p" + it.page;
-const pageName = it => manyDocs() ? pageTag(it) : "page " + it.page;
+// every page of every open file is worth seeing, even a one-page PDF
+const showRail = () => state.docs.length > 0;
+// copies of one page, in the order they were added
+const copiesOf = (docId, n) => state.items.filter(it => it.doc === docId && it.page === n);
+// what a page is called: "p3" on its own, "B3" once several files are open,
+// and "B3·2" for the second copy of it
+function pageTag(it) {
+  const base = manyDocs() ? docLetter(it.doc) + it.page : "p" + it.page;
+  const copies = copiesOf(it.doc, it.page);
+  return copies.length > 1 ? `${base}·${copies.indexOf(it) + 1}` : base;
+}
+const pageName = it => manyDocs() || copiesOf(it.doc, it.page).length > 1
+  ? pageTag(it) : "page " + it.page;
 const esc = s => String(s).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 
 // ---------- page rail ----------
@@ -408,11 +417,23 @@ function buildRail() {
       card.className = "thumb";
       card.dataset.doc = d.id; card.dataset.page = n;
       card.innerHTML = `<div class="tframe"><img loading="lazy" alt="Page ${n}" src="/thumb/${d.id}/${n}.png"></div>
-        <div class="tfoot"><span>Page ${n}</span><button type="button" class="tbtn"></button></div>`;
+        <div class="tfoot"><span>Page ${n}</span>
+          <button type="button" class="tbtn" data-act="add"></button>
+          <div class="steps" hidden>
+            <button type="button" data-act="less" title="One copy fewer">−</button>
+            <b data-copies>1</b>
+            <button type="button" data-act="more" title="One more copy">+</button>
+          </div></div>`;
       card.onclick = e => {
-        const it = itemFor(d.id, n);
-        if (e.target.closest(".tbtn")) { it ? removeItem(it) : includePage(d.id, n); return; }
-        if (it) select(it);
+        const act = e.target.closest("[data-act]"), copies = copiesOf(d.id, n);
+        if (act) {
+          const how = act.dataset.act;
+          if (how === "less") copies.length && removeItem(copies[copies.length - 1]);
+          else includePage(d.id, n, how === "more");   // "add" selects an existing copy
+          return;
+        }
+        if (copies.length) select(state.active && copies.includes(state.active)
+          ? state.active : copies[0]);
       };
       grp.appendChild(card);
     }
@@ -420,33 +441,41 @@ function buildRail() {
   });
   $("#includeAll").onclick = async () => {
     for (const d of state.docs)
-      for (let n = 1; n <= d.pages; n++) if (!itemFor(d.id, n)) await includePage(d.id, n);
+      for (let n = 1; n <= d.pages; n++) if (!copiesOf(d.id, n).length) await includePage(d.id, n);
   };
   renderRail();
 }
 function renderRail() {
   if ($("#rail").hidden) return;
   document.querySelectorAll("#thumbs .thumb").forEach(card => {
-    const it = itemFor(card.dataset.doc, +card.dataset.page), btn = card.querySelector(".tbtn");
-    card.classList.toggle("on", !!it);
-    card.classList.toggle("active", !!it && it === state.active);
-    card.classList.toggle("bad", !!it && it.bad);
-    if (!card.classList.contains("busy") && !card.classList.contains("blank"))
-      btn.textContent = it ? "Remove" : "Include";
+    const copies = copiesOf(card.dataset.doc, +card.dataset.page);
+    const spare = card.classList.contains("busy") || card.classList.contains("blank");
+    card.classList.toggle("on", copies.length > 0);
+    card.classList.toggle("active", copies.includes(state.active));
+    card.classList.toggle("bad", copies.some(it => it.bad));
+    // nothing on the bed yet: one button. Once it is there: − n +
+    card.querySelector(".tbtn").hidden = copies.length > 0 || spare;
+    card.querySelector(".steps").hidden = copies.length === 0 || spare;
+    card.querySelector("[data-copies]").textContent = copies.length;
+    if (!spare) card.querySelector(".tbtn").textContent = "Include";
   });
-  const on = state.items.length, all = allPages();
-  $("#railCount").textContent = manyDocs()
-    ? `${on} of ${all} · ${state.docs.length} files`
-    : `${on} of ${all} on the bed`;
-  $("#includeAll").hidden = on === all;
+  const placed = state.items.length, pages = new Set(state.items.map(it => it.doc + "/" + it.page)).size;
+  const all = allPages();
+  $("#railCount").textContent = `${pages} of ${all} page${all === 1 ? "" : "s"}` +
+    (manyDocs() ? ` · ${state.docs.length} files` : "") +
+    (placed > pages ? ` · ${placed} on the bed` : "");
+  $("#includeAll").hidden = pages === all;
 }
 
 // ---------- bed items: one per page placed on the bed ----------
-const itemFor = (docId, n) => state.items.find(it => it.doc === docId && it.page === n) || null;
+const itemFor = (docId, n) => copiesOf(docId, n)[0] || null;
+let lastUid = 0;
 
-async function includePage(docId, n) {
-  const have = itemFor(docId, n);
-  if (have) return select(have);
+// `another` adds one more copy of a page that is already on the bed; without
+// it, a page that is already there is simply selected
+async function includePage(docId, n, another) {
+  const have = copiesOf(docId, n);
+  if (have.length && !another) return select(have[have.length - 1]);
   const d = docFor(docId);
   if (!d) return;
   const card = document.querySelector(`#thumbs .thumb[data-doc="${docId}"][data-page="${n}"]`);
@@ -467,7 +496,7 @@ async function includePage(docId, n) {
     renderRail();
     return;
   }
-  const it = { doc: docId, page: n, pd, off: { x: 0, y: 0 }, rot: 0 };
+  const it = { uid: ++lastUid, doc: docId, page: n, pd, off: { x: 0, y: 0 }, rot: 0 };
   it.els = buildItemEls(it);
   state.items.push(it);
   // the first page centres on the stock; later ones take the first free spot
@@ -504,7 +533,7 @@ function select(it) {
 }
 
 function buildItemEls(it) {
-  const pd = it.pd, id = `clip-${it.doc}-${it.page}`;
+  const pd = it.pd, id = `clip-${it.uid}`;
   const cp = mk("clipPath", { id, clipPathUnits: "userSpaceOnUse" });
   const clipR = mk("rect", { x: 0, y: 0, width: 1, height: 1 });
   cp.appendChild(clipR); bedEls.defs.appendChild(cp);
@@ -658,7 +687,7 @@ function attachDrag(art, it) {
 
 function updatePlacement() {
   if (!bedEls || !state.docs.length) return;
-  const B = bounds(), S = sheetBox(), multi = showRail();
+  const B = bounds(), S = sheetBox(), multi = state.items.length > 1 || manyDocs();
   const problems = [], notes = [];
 
   // each page: in bounds? then draw it
@@ -709,7 +738,7 @@ function updatePlacement() {
   // the Artwork card edits the selected page
   const it = state.active;
   const who = $("#placeWhich");
-  who.textContent = it && multi ? "· " + (manyDocs() ? pageTag(it) : "page " + it.page) : "";
+  who.textContent = it && multi ? "· " + pageTag(it) : "";
   who.title = it && manyDocs() ? `page ${it.page} of ${docFor(it.doc).name}` : "";
   ["#offx", "#offy", "#rotateBtn", "#centerBtn"].forEach(s => { $(s).disabled = !it; });
   if (it) {
@@ -725,7 +754,7 @@ function updatePlacement() {
     $("#placeInfo").textContent =
       `Artwork ${d.w.toFixed(0)}×${d.h.toFixed(0)} mm at (${it.off.x.toFixed(0)}, ${it.off.y.toFixed(0)}) · ` +
       `reaches (${(it.off.x + d.w).toFixed(0)}, ${(it.off.y + d.h).toFixed(0)}) · bed ${state.machine.bed_w_mm}×${state.machine.bed_h_mm}` +
-      (multi ? ` · ${state.items.length} page${state.items.length === 1 ? "" : "s"} on the bed` +
+      (multi ? ` · ${state.items.length} on the bed` +
         (manyDocs() ? ` from ${new Set(state.items.map(o => o.doc)).size} files` : "") : "");
   } else {
     $("#rotWhy").hidden = true;

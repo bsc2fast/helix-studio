@@ -176,12 +176,15 @@ as environment variables.
    enabled when the turned sheet or artwork still fits from where it sits — the
    card says how far to move it when it doesn't.
    **The page list** down the left shows every page of every open PDF, grouped
-   by file. Page 1 of each file starts on the bed; **Include** puts another page
-   on in the first free spot, so pages from one file or several can be laid out
-   on one larger sheet and sent as a single job. With more than one file open,
-   each is lettered and its pages are labelled `A1`, `B2`… on the bed. **✕**
-   closes a file and takes its pages off with it. Overlapping pages turn red and
-   **Send** stays disabled until you move them apart.
+   by file — including a one-page PDF. Page 1 of each file starts on the bed;
+   **Include** puts another page on in the first free spot, so pages from one
+   file or several can be laid out on one larger sheet and sent as a single job.
+   **− n +** on a page sets how many **copies** of it are on the bed; each copy
+   is placed in the next free spot and can be dragged and rotated on its own.
+   With more than one file open, each is lettered and its pages are labelled
+   `A1`, `B2`… on the bed (`B2·1`, `B2·2` for copies). **✕** closes a file and
+   takes its pages off with it. Overlapping pages turn red and **Send** stays
+   disabled until you move them apart.
 3. **Pick material and thickness**, then a **preset**. Engrave presets (`▦`)
    raster the artwork; cut presets (`✂`) follow its vector lines. Presets that
    cannot cut through the thickness you chose are hidden.
