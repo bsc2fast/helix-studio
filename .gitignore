@@ -9,3 +9,4 @@ site/.wrangler/
 site/dev.log
 
 prefs.json
+finishes.json

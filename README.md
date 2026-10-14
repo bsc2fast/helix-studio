@@ -129,7 +129,12 @@ working in (material, thickness, stock size and where that stock lies on the
 bed, machine, and a laser adopted by a scan), so a new session opens where the
 last one left off. It is a convenience file, not configuration: delete it and
 you only lose the dropdown positions, and `config.json` always wins over it. The
-**preset is deliberately not remembered** — power and speed are chosen per job.
+**preset is not remembered** — a new session starts on the material's first
+preset, so check power and speed for the job in front of you.
+
+Material colours you add on the **Settings** page (⚙) are kept in a
+`finishes.json` beside it, also gitignored. The built-in colours can't be
+edited; yours sit beside them.
 
 > Start conservative with `usable_*`. Widen it only after you have watched the
 > head travel to that edge and clear the rails.
@@ -168,15 +173,16 @@ as environment variables.
 
 ## Using it
 
-1. **Drop a PDF** onto the page (or click to choose one). Vector artwork works
+1. **Drop a PDF** onto the window (or click the **Artwork** card to choose one). Vector artwork works
    best; the page is cropped to its ink, so whitespace around the design is
    ignored. Drop **several PDFs**, or add more later with **+ PDF** — they all
    stay open, listed down the left, and one job can mix pages from any of them.
 2. **Place it.** Drag the artwork around the bed picture, or type X/Y in mm.
    X/Y is measured from the laser's home corner (top-left). `Rotate` turns it
-   in 90° steps, `Center` centres it in the safe area. The outline is green
-   while the placement is legal and red once it crosses the dashed safety
-   boundary — and **Send** is disabled while it is red. Pick a **material
+   in 90° steps, `Center` centres it in the safe area. Each page has a dotted
+   outline, which turns red once it crosses the dashed safety boundary — and
+   **Send** is disabled while it is red. **Delete** takes the selected page off
+   the bed. Pick a **material
    size** (A4, Arch B, Letter… — only sizes that fit the bed are listed) to see
    your stock drawn on the bed; drag it, or type its X/Y in the **Material**
    card, to match where the sheet really lies. `Rotate` on either card is only
@@ -192,11 +198,17 @@ as environment variables.
    `A1`, `B2`… on the bed (`B2·1`, `B2·2` for copies). **✕** closes a file and
    takes its pages off with it. Overlapping pages turn red and **Send** stays
    disabled until you move them apart.
-3. **Pick material and thickness**, then a **preset**. The material, thickness
-   and stock size come back as you left them next time you start; the preset
-   does not — choose it for the job in front of you. Engrave presets (`▦`)
-   raster the artwork; cut presets (`✂`) follow its vector lines. Presets that
-   cannot cut through the thickness you chose are hidden.
+3. **Pick material and thickness**, then a **preset**. Each dropdown opens a
+   visual picker: materials as swatches in the colours they're sold in,
+   thicknesses edge-on at real size, stock sizes drawn on the bed, presets as a
+   sample burn. The material, its colour, thickness and stock size come back as
+   you left them next time you start; the preset does not. Engrave presets
+   (`▦`) raster the artwork; cut presets (`✂`) follow its vector lines. Presets
+   that cannot cut through the thickness you chose are hidden.
+   **The bed shows the burn, not the PDF:** artwork is drawn on the stock as
+   the laser will leave it, darker and deeper for harder presets. The raster is
+   1-bit — every pixel that isn't near-white burns at full power — so greys and
+   colours all burn alike, and the preview shows exactly that.
 4. **Send.** The job appears on the laser's queue; walk over and press **GO**.
 
 **To engrave and then cut the same piece**, send twice: choose the engrave
@@ -223,8 +235,10 @@ PDF ──pdftocairo──► preview + raster ──┬──► engrave: 1-bit
 | `driver/pdfjob.py` | PDF → page size, colour raster, layer detection, vector extraction (Poppler + a compact SVG path flattener) |
 | `data/materials.json` | Epilog Mini/Helix suggested settings, 30 W column |
 | `data/machine.json` | the shipped bed calibration — override it in `config.json` |
-| `web/` | the UI (one HTML file, one JS file, no build step, no dependencies) |
+| `web/` | the UI (`index.html`, `app.js`, and `picker.js` for the visual pickers, material looks and Settings — no build step, no dependencies) |
+| `web/img/` | optional photos: `<machine-name>.jpg` for the machine, `mat-<material>-<colour>.jpg` to replace a drawn material |
 | `prefs.json` | the last setup, written as you work (gitignored) |
+| `finishes.json` | your own material colours, from Settings (gitignored) |
 
 Speed and power are 0–100 %. Engraving is specified in **DPI**, cutting in
 **frequency (Hz)**.

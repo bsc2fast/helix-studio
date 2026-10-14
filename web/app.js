@@ -15,12 +15,13 @@ const state = {
   sending: false,
   vb: { w: 1, h: 1 }, page: { w: 0, h: 0 },
   prefs: {},          // last setup, kept in prefs.json next to the server
+  finish: null,       // the material's colour ("Walnut", "Black acrylic"…) — picker.js knows the list
 };
 
 // ---------- last setup (server-side prefs.json, so it survives the browser) ----------
 // Material, thickness, stock size and where the stock lies are remembered as
 // they change; the next session opens on the same setup. The preset is NOT
-// remembered on purpose — power and speed are chosen per job, deliberately.
+// remembered — a new session starts on the material's first preset.
 let prefsTimer = null;
 function savePrefs(patch) {
   Object.assign(state.prefs, patch);
@@ -34,6 +35,12 @@ function savePrefs(patch) {
 function restore(sel, value) {
   if (value && [...sel.options].some(o => o.value === value)) { sel.value = value; return true; }
   return false;
+}
+// with nothing saved (or the saved option gone), start on the first real option
+// rather than the "— placeholder —"
+function firstOption(sel) {
+  const o = [...sel.options].find(o => o.value !== "" && !o.disabled);
+  if (o) sel.value = o.value;
 }
 
 // ---------- theme ----------
@@ -108,9 +115,12 @@ async function boot() {
   mat.materials.forEach(mm => sel.appendChild(new Option(mm.name, mm.name)));
   // pick up where the last session left off — presets are then listed for it,
   // but none is selected: that choice is made per job
-  const had = restore(sel, state.prefs.material);
-  restore($("#thickness"), state.prefs.thickness);
-  if (had) renderPresets();
+  if (!restore(sel, state.prefs.material)) firstOption(sel);
+  state.finish = state.prefs.finish || null;
+  syncFinish();
+  if (!restore($("#thickness"), state.prefs.thickness)) firstOption($("#thickness"));
+  renderPresets();
+  drawSheet();   // the bed was drawn before the material was known: paint the stock now
   fitBar();
 }
 
@@ -210,6 +220,12 @@ function fitBed() {
   const bed = $("#bed");
   bed.style.width = Math.max(50, w) + "px";
   bed.style.height = Math.max(50, h) + "px";
+  // the side cards line up with the bed: they start at its top edge and end at
+  // its bottom edge, wherever centring put it
+  const main = document.querySelector("main"), mr = main.getBoundingClientRect(), br = bed.getBoundingClientRect();
+  const top = Math.round(br.top - mr.top), bottom = Math.round(br.bottom - mr.top);
+  main.style.setProperty("--bed-top", top + "px");
+  main.style.setProperty("--bed-h", bottom - top + "px");
 }
 window.addEventListener("resize", fitBed);
 
@@ -255,7 +271,7 @@ function renderSheetOptions() {
     }
     localStorage.removeItem("hs-sheet"); localStorage.removeItem("hs-sheet-off");
   } catch (e) {}
-  restore(sel, state.prefs.sheet);
+  if (!restore(sel, state.prefs.sheet)) firstOption(sel);
   const off = state.prefs.sheet_off;
   if (off) Object.assign(state.sheetOff, { x: +off.x || 0, y: +off.y || 0 });
 }
@@ -284,6 +300,18 @@ function drawSheet() {
   if (!s) { bedEls.sheet.setAttribute("hidden", "hidden"); return; }
   for (const [k, v] of Object.entries({ x: s.x, y: s.y, width: s.w, height: s.h }))
     bedEls.sheetRect.setAttribute(k, v);
+  // the textures are tuned for ~200-unit swatches: draw at a third of a mm per unit
+  const mat = $("#material").value, look = window.HSLook;
+  if (look && mat) {
+    for (const [k, v] of Object.entries({ x: s.x, y: s.y, width: s.w, height: s.h, viewBox: `0 0 ${s.w / 3} ${s.h / 3}` }))
+      bedEls.sheetTex.setAttribute(k, v);
+    bedEls.sheetTex.innerHTML = look.texture(mat, s.w / 3, s.h / 3, state.finish);
+    bedEls.sheetTex.removeAttribute("hidden");
+    bedEls.sheetRect.setAttribute("fill", "transparent");
+  } else {
+    bedEls.sheetTex.setAttribute("hidden", "hidden");
+    bedEls.sheetRect.setAttribute("fill", "var(--sheet)");
+  }
   bedEls.sheetLbl.setAttribute("x", s.x + s.w - 6);
   bedEls.sheetLbl.setAttribute("y", s.y + s.h - 7);
   bedEls.sheetLbl.textContent = `${s.name} · ${mmTxt(s.w)} × ${mmTxt(s.h)} mm`;
@@ -375,7 +403,7 @@ function dropMsg(big, hint, bad) {
   $("#dropHint").textContent = hint;
   $("#dropHint").className = bad ? "warn" : "hint";
 }
-const DROP_IDLE = ["Drop PDFs here", "or click to choose · one file or several"];
+const DROP_IDLE = ["Drop PDFs", "or click to choose"];
 
 async function importPdf(file) {
   const first = !state.docs.length;
@@ -549,6 +577,18 @@ function removeItem(it) {
   if (state.active) select(state.active); else { updatePlacement(); renderRail(); }
 }
 
+// Delete (or Backspace) takes the selected page off the bed — unless you're
+// typing in a field or a picker panel is open
+document.addEventListener("keydown", e => {
+  if ((e.key !== "Delete" && e.key !== "Backspace") || e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target;
+  if (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+  const picker = document.getElementById("picker");
+  if ((picker && !picker.hidden) || !state.active) return;
+  e.preventDefault();
+  removeItem(state.active);
+});
+
 // closing a file takes its pages off the bed with it; with the last one gone
 // the app is back to its empty state, ready for a fresh drop
 function removeDoc(d) {
@@ -662,10 +702,13 @@ function buildBed() {
   bed.appendChild(mk("rect", { x: 0, y: 0, width: m.bed_w_mm, height: m.bed_h_mm, fill: "var(--bed)", stroke: "var(--line)", "stroke-width": 1 }));
   // the stock sheet — draggable; pages sit above it, so they still win the click
   const sheet = mk("g", { hidden: "hidden" });
+  // the stock drawn as the material itself, in its colour (picker.js paints it)
+  const sheetTex = mk("svg", { "pointer-events": "none", preserveAspectRatio: "none", opacity: 0.9 });
   const sheetRect = mk("rect", { class: "sheetrect", rx: 2, fill: "var(--sheet)", stroke: "var(--sheetline)",
     "stroke-width": 1.2, "pointer-events": "all" });
-  const sheetLbl = mk("text", { "font-size": 10, "text-anchor": "end", fill: "var(--sheetline)", "pointer-events": "none" });
-  sheet.append(sheetRect, sheetLbl);
+  const sheetLbl = mk("text", { "font-size": 10, "text-anchor": "end", fill: "var(--sheetline)", "pointer-events": "none",
+    stroke: "var(--bed)", "stroke-width": 3, "paint-order": "stroke" });
+  sheet.append(sheetTex, sheetRect, sheetLbl);
   bed.appendChild(sheet);
   const B = bounds();  // dashed safety boundary = allowed placement area
   bed.appendChild(mk("rect", {
@@ -678,7 +721,7 @@ function buildBed() {
   const items = mk("g", {});
   const overlaps = mk("g", { "pointer-events": "none" });   // red wash where pages collide
   bed.append(items, overlaps);
-  bedEls = { defs, items, overlaps, sheet, sheetRect, sheetLbl };
+  bedEls = { defs, items, overlaps, sheet, sheetTex, sheetRect, sheetLbl };
   dragWith(sheetRect, () => state.sheetOff, (x, y) => { state.sheetOff = { x, y }; moveSheet(); });
   drawSheet();
 }
@@ -769,8 +812,11 @@ function updatePlacement() {
       problems.push(`⚠ ${cap(pageName(a))} and ${pageName(b)} overlap — drag them apart.`);
     }
   state.items.forEach(it => {
-    it.els.art.setAttribute("stroke", it.bad ? "var(--danger)" : "var(--accent)");
-    it.els.art.setAttribute("stroke-width", it === state.active ? 2.5 : 1.3);
+    // a dotted frame in its own colour: the page's extent, without hiding the burn
+    it.els.art.setAttribute("stroke", it.bad ? "var(--danger)" : "var(--artline)");
+    it.els.art.setAttribute("stroke-width", it === state.active ? 1.8 : 1.1);
+    it.els.art.setAttribute("stroke-dasharray", it === state.active ? "0.1 3.2" : "0.1 2.6");
+    it.els.art.setAttribute("stroke-linecap", "round");
   });
 
   // the Artwork card edits the selected page
@@ -842,6 +888,16 @@ function currentOp() {
   const m = currentMaterial(), i = $("#preset").value;
   return (m && i !== "") ? m.operations[+i] : null;
 }
+// a preset's name for display: its "(300 DPI)" goes (the DPI is shown anyway),
+// and an inch size keeps — or gains — its millimetres: Cutting 1/8" (3 mm)
+function presetLabel(op) {
+  const l = op.label.replace(/\s*\(\d+\s*DPI\)/i, "");
+  if (/\(\s*[\d.]+\s*mm\s*\)/i.test(l)) return l;
+  return l.replace(/(\d+\/\d+|\d*\.\d+|\d+)\s*(?:"|″|in\b)/g, (all, v) => {
+    const [a, b] = v.split("/"), mm = (b ? a / b : +a) * 25.4;
+    return `${all} (≈${mm < 10 ? Math.round(mm * 10) / 10 : Math.round(mm)} mm)`;
+  });
+}
 function renderPresets() {
   const m = currentMaterial(), sel = $("#preset");
   const T = parseFloat($("#thickness").value) || null;
@@ -853,30 +909,147 @@ function renderPresets() {
     if (op.type === "cut" && T != null && op.thickness_mm != null && op.thickness_mm < T) return;
     const icon = op.type === "cut" ? "✂" : "▦";
     const extra = op.type === "cut" ? `${op.freq}Hz` : `${op.dpi}dpi`;
-    const thk = (op.type === "cut" && op.thickness_mm) ? ` · ≤${op.thickness_mm}mm` : "";
-    // the preset labels carry their own "(300 DPI)" / "(3 mm)" which we append
-    // anyway — drop the parenthetical so the option text stays readable
-    const label = op.label.replace(/\s*\((?:\d+\s*DPI|[\d.]+\s*mm)\)/i, "");
+    const label = presetLabel(op);
+    const thk = (op.type === "cut" && op.thickness_mm && !/mm\)/.test(label)) ? ` · ≤${op.thickness_mm}mm` : "";
     sel.appendChild(new Option(`${icon} ${label} · S${op.speed} P${op.power} · ${extra}${thk}`, i));
   });
-  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  // the value is an index into the material's own list: carrying it over to a
+  // different material would land on an unrelated preset (Wood's #3 is an
+  // engrave, Acrylic's #3 a cut) — so a new material starts on its first
+  const same = m && sel.dataset.material === m.name;
+  sel.dataset.material = m ? m.name : "";
+  if (!(same && restore(sel, prev))) firstOption(sel);
   fitSelect(sel);
   highlight(); updatePlacement();
 }
-$("#material").onchange = () => { savePrefs({ material: $("#material").value }); renderPresets(); };
+// the material's colour: keep it if the new material comes in it, else its first;
+// the app bar shows it after the name ("Wood · Walnut")
+function syncFinish() {
+  const sel = $("#material"), look = window.HSLook;
+  const fins = look && sel.value ? look.finishesOf(sel.value) : [];
+  // until your own colours have loaded, a saved custom colour isn't in the list
+  // yet — show the first, but don't forget the saved one
+  if (fins.length && !fins.includes(state.finish) && look.ready) state.finish = fins[0];
+  const shown = fins.includes(state.finish) ? state.finish : fins[0];
+  // the bar shows the colour as a swatch inside the pill, its name on hover —
+  // the option text stays the plain material name
+  const chip = $("#finishChip"), on = fins.length > 1;
+  chip.hidden = !on;
+  sel.classList.toggle("has-chip", on);
+  if (on) {
+    chip.style.background = look.swatch(sel.value, shown);
+    chip.title = shown;
+    chip.setAttribute("aria-label", `Colour: ${shown}`);
+  }
+  sel.title = on ? `${sel.value} — ${shown}` : "";
+  fitSelect(sel);
+}
+// the swatch sits over the pill: a click on it is a click on the material
+$("#finishChip").onmousedown = e => {
+  e.preventDefault();
+  $("#material").dispatchEvent(new MouseEvent("mousedown", { button: 0, bubbles: true, cancelable: true }));
+};
+$("#material").onchange = () => {
+  syncFinish();
+  savePrefs({ material: $("#material").value, finish: state.finish });
+  renderPresets(); drawSheet();
+};
 $("#thickness").onchange = () => { savePrefs({ thickness: $("#thickness").value }); renderPresets(); };
 $("#preset").onchange = () => { highlight(); updatePlacement(); };
 
-// highlight artwork by selected preset: cut → red vector lines, engrave → green wash
+// ---------- the artwork as it will burn ----------
+// A page isn't drawn as the PDF (white paper, colours) but as what the laser
+// leaves on the stock: transparent where nothing burns, and the material's own
+// burn colour where it does. The rule matches the driver exactly — an engrave
+// burns every pixel that isn't near-white (pdfjob.raster_from_colors: any
+// channel ≤ 245), 1-bit, at one power: there is no greyscale, so a pale grey
+// burns as hard as black, and so does any colour. How dark, deep and charred
+// that burn looks comes from the preset (power ÷ speed × DPI) on this material.
+// A cut preset burns no raster at all — only the vector lines, as kerf.
+const MASKS = new Map(), BURNS = new Map();
+function burnMask(pd) {
+  if (!MASKS.has(pd.preview)) MASKS.set(pd.preview, new Promise((ok, fail) => {
+    const im = new Image();
+    im.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = im.naturalWidth; c.height = im.naturalHeight;
+      const x = c.getContext("2d", { willReadFrequently: true });
+      x.drawImage(im, 0, 0);
+      const d = x.getImageData(0, 0, c.width, c.height), p = d.data;
+      for (let i = 0; i < p.length; i += 4) {
+        const burn = p[i + 3] > 0 && !(p[i] > 245 && p[i + 1] > 245 && p[i + 2] > 245);
+        p[i] = p[i + 1] = p[i + 2] = 255; p[i + 3] = burn ? 255 : 0;
+      }
+      x.putImageData(d, 0, 0);
+      ok(c);
+    };
+    im.onerror = fail;
+    im.src = pd.preview;
+  }));
+  return MASKS.get(pd.preview);
+}
+function tinted(mask, colour) {
+  const c = document.createElement("canvas");
+  c.width = mask.width; c.height = mask.height;
+  const x = c.getContext("2d");
+  x.drawImage(mask, 0, 0);
+  x.globalCompositeOperation = "source-in";
+  x.fillStyle = colour; x.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+function burnLook() {
+  const look = window.HSLook, mat = $("#material").value, op = currentOp();
+  const L = look && mat ? look.look(mat, state.finish)
+                        : { mark: "#2a2a2a", frost: false, organic: false, dark: false };
+  return { L, t: look && mat && op ? look.burn(mat, op) : 0.5 };
+}
+async function renderBurn(it) {
+  const { L, t } = burnLook(), pd = it.pd;
+  const key = `${pd.preview}|${L.mark}|${L.frost}|${L.organic}|${t.toFixed(3)}`;
+  if (it.burnKey === key) return;
+  it.burnKey = key;
+  if (!BURNS.has(key)) BURNS.set(key, burnMask(pd).then(mask => new Promise(ok => {
+    const pxmm = mask.width / pd.width_mm;
+    const c = document.createElement("canvas");
+    c.width = mask.width; c.height = mask.height;
+    const x = c.getContext("2d");
+    if (L.organic) {   // scorch: wood, leather, card… brown around a hard burn
+      x.globalAlpha = 0.08 + 0.4 * t;
+      x.filter = `blur(${((0.12 + 0.45 * t) * pxmm).toFixed(1)}px)`;
+      x.drawImage(tinted(mask, L.mark), 0, 0);
+      x.filter = "none";
+    }
+    x.globalAlpha = 0.12 + 0.25 * t;   // the lit lower lip of the recess: reads as depth
+    x.drawImage(tinted(mask, "#fff"), 0, (0.04 + 0.2 * t) * pxmm);
+    x.globalAlpha = L.frost ? 0.45 + 0.4 * t : 0.4 + 0.6 * t;
+    x.drawImage(tinted(mask, L.mark), 0, 0);
+    c.toBlob(b => ok(URL.createObjectURL(b)));
+  })).catch(() => pd.preview));
+  const url = await BURNS.get(key);
+  if (it.burnKey === key) it.els.img.setAttribute("href", url);
+}
+// redraw every page for the current material, colour and preset
 function highlight() {
-  const op = currentOp();
-  const isCut = op && op.type === "cut", isEng = op && op.type === "engrave";
-  state.items.forEach(({ els }) => {
-    els.cutlines.setAttribute("stroke", isCut ? "var(--danger)" : "transparent");
+  const op = currentOp(), isCut = op && op.type === "cut";
+  const { L, t } = burnLook();
+  state.items.forEach(it => {
+    const els = it.els;
+    els.engwash.setAttribute("hidden", "hidden");
+    // a cut burns only the vectors: the raster isn't engraved, so it isn't shown
+    if (isCut) els.img.setAttribute("visibility", "hidden"); else els.img.removeAttribute("visibility");
+    els.cutlines.setAttribute("stroke", L.dark ? "#d8d4cf" : "#1a0f08");
+    els.cutlines.setAttribute("stroke-width", (0.15 + 0.35 * t).toFixed(2));
+    els.cutlines.setAttribute("stroke-opacity", 0.9);
     if (isCut) els.cutlines.removeAttribute("hidden"); else els.cutlines.setAttribute("hidden", "hidden");
-    if (isEng) els.engwash.removeAttribute("hidden"); else els.engwash.setAttribute("hidden", "hidden");
+    if (!isCut) renderBurn(it);
   });
 }
+// picker.js calls this when your own colours load or change
+window.hsFinishesChanged = () => {
+  syncFinish();
+  if ($("#material").value && state.finish) savePrefs({ finish: state.finish });
+  drawSheet(); highlight();
+};
 
 // ---------- send (one operation over every page on the bed, as one job) ----------
 $("#sendBtn").onclick = async () => {

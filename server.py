@@ -16,6 +16,9 @@ sends them to the Epilog Helix.
   GET  /api/prefs            -> the last setup (material, thickness, sheet + where
                                 it lies, machine, adopted laser), from prefs.json
   POST /api/prefs            -> merge a few of those keys back into prefs.json
+  GET  /api/finishes         -> your own material colours (finishes.json)
+  POST /api/finishes         -> replace them (from the Settings page)
+  GET  /api/images           -> picture files in web/img/ (material/machine photos)
   GET  /api/laser/status     -> {host, online, busy}: is the laser's LPD port up?
   POST /api/laser/scan       -> sweep the local /24s for LPD hosts; adopts the
                                 laser when exactly one answers (or body {host})
@@ -71,6 +74,7 @@ PREFS_PATH = os.path.join(HERE, "prefs.json")
 PREF_SPEC = {
     "machine": ("text", 120),      # machine name, as the dropdown shows it
     "material": ("text", 120),     # material name from materials.json
+    "finish": ("text", 40),        # its colour, as the material picker names it
     "thickness": ("text", 12),     # the thickness option's value ("3")
     "sheet": ("text", 40),         # stock size id ("A3|L")
     "sheet_off": ("xy", None),     # where that sheet lies on the bed, mm
@@ -129,6 +133,53 @@ def save_prefs(patch):
     except OSError as e:
         print("helix-studio: could not save prefs.json (%s)" % e)
     return prefs
+
+
+# Your own material colours, added on the Settings page beside the built-in
+# ones (which live in the front-end and can't be edited). Gitignored, like
+# config.json, so a `git pull` never touches them.
+FINISHES_PATH = os.path.join(HERE, "finishes.json")
+HEX = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def clean_finishes(data):
+    """Keep well-formed entries only: {material, name, base, mark, see_through}."""
+    out = []
+    items = data.get("custom") if isinstance(data, dict) else None
+    for c in (items if isinstance(items, list) else [])[:500]:
+        if not isinstance(c, dict):
+            continue
+        mat, name = c.get("material"), c.get("name")
+        base, mark = c.get("base"), c.get("mark")
+        if not (isinstance(mat, str) and 0 < len(mat) <= 120 and isinstance(name, str)
+                and 0 < len(name.strip()) <= 40 and isinstance(base, str) and HEX.fullmatch(base)
+                and isinstance(mark, str) and HEX.fullmatch(mark)):
+            continue
+        out.append({"material": mat, "name": name.strip(), "base": base.lower(), "mark": mark.lower(),
+                    "see_through": bool(c.get("see_through"))})
+    return {"custom": out}
+
+
+def load_finishes():
+    try:
+        with open(FINISHES_PATH) as f:
+            return clean_finishes(json.load(f))
+    except (OSError, ValueError):
+        return {"custom": []}
+
+
+def save_finishes(data):
+    """Replace finishes.json whole, atomically (same reasoning as prefs.json)."""
+    clean = clean_finishes(data)
+    tmp = FINISHES_PATH + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(clean, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, FINISHES_PATH)
+    except OSError as e:
+        print("helix-studio: could not save finishes.json (%s)" % e)
+    return clean
 
 
 def load_materials():
@@ -338,10 +389,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_file(os.path.join(HERE, "web", "index.html"), "text/html")
         if path == "/app.js":
             return self._send_file(os.path.join(HERE, "web", "app.js"), "text/javascript")
+        if path == "/picker.js":
+            return self._send_file(os.path.join(HERE, "web", "picker.js"), "text/javascript")
+        # pictures for the visual picker (web/img/) — a flat folder, names checked
+        m = re.fullmatch(r"/img/([\w-]+)\.(jpg|jpeg|png|webp|svg)", path)
+        if m:
+            f = os.path.join(HERE, "web", "img", "%s.%s" % m.groups())
+            if not os.path.isfile(f):
+                return self._send_json({"error": "not found"}, 404)
+            ctype = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                     "webp": "image/webp", "svg": "image/svg+xml"}[m.group(2)]
+            return self._send_file(f, ctype)
+        if path == "/api/images":   # what web/img/ holds, so the picker asks only for real files
+            d = os.path.join(HERE, "web", "img")
+            names = sorted(n for n in os.listdir(d) if re.fullmatch(r"[\w-]+\.(jpg|jpeg|png|webp|svg)", n)) \
+                if os.path.isdir(d) else []
+            return self._send_json(names)
         if path == "/api/materials":
             return self._send_json(load_materials())
         if path == "/api/prefs":
             return self._send_json(load_prefs())
+        if path == "/api/finishes":
+            return self._send_json(load_finishes())
         if path == "/api/config":
             mc = CFG["machine"]
             return self._send_json({"laser_host": CFG["laser_host"], "machine": mc,
@@ -388,6 +457,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/prefs":
                 patch = json.loads(self._read_body().decode() or "{}")
                 return self._send_json(save_prefs(patch if isinstance(patch, dict) else {}))
+            if self.path == "/api/finishes":
+                data = json.loads(self._read_body().decode() or "{}")
+                return self._send_json(save_finishes(data))
             if self.path == "/api/laser/scan":
                 return self.handle_scan()
             return self._send_json({"error": "not found"}, 404)

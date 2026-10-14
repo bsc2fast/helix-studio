@@ -9,20 +9,25 @@
     --bg:#14151a; --panel:#1d1f27; --panel2:#262933; --line:#333644;
     --ink:#e8e9ee; --muted:#9297a8; --accent:#7bd88f; --accent2:#6aa8ff;
     --danger:#ff6b6b; --warn:#ffb454; --bed:#0c0d11; --bedline:#3a3f50;
-    --bar:#0f1420; --barline:#2a3040; --shadow:0 10px 34px rgba(0,0,0,.45);
+    --bar:#0a0e18; --barline:#232b3b; --shadow:0 10px 34px rgba(0,0,0,.45);
+    /* floating cards stack 12px apart: a tight shadow that doesn't pool in the gaps */
+    --shadow-card:0 1px 2px rgba(0,0,0,.3), 0 3px 10px rgba(0,0,0,.22);
     --ctl-h:34px;   /* one height for every app-bar control */
     /* The bed is centred between two gutters of equal width, and the page rail
        floats over the left one: showing or hiding the rail then never moves the
        bed. The gutter is as wide as the widest thing that sits in it. */
-    --rail-w:186px; --ctrl-w:216px; --gutter:240px;
+    --rail-w:var(--ctrl-w); --ctrl-w:216px; --gutter:240px;
     --sheet:rgba(180,140,255,.12); --sheetline:#b18cff;   /* the stock sheet on the bed */
+    --artline:#3ee0d0;   /* dotted frame round each page of artwork */
   }
   html[data-theme="light"]{
     --bg:#eef1f5; --panel:#ffffff; --panel2:#eceff4; --line:#d6dae2;
     --ink:#1a1c22; --muted:#5b6274; --accent:#1f9d4d; --accent2:#2f6fed;
     --danger:#d23b3b; --warn:#c77d15; --bed:#dfe3ea; --bedline:#b0b8c6;
-    --bar:#e7edf9; --barline:#cdd6e6; --shadow:0 10px 30px rgba(20,30,60,.16);
+    --bar:#141b2b; --barline:#0b1020; --shadow:0 10px 30px rgba(20,30,60,.16);
+    --shadow-card:0 1px 2px rgba(20,30,60,.08), 0 3px 10px rgba(20,30,60,.07);
     --sheet:rgba(124,77,255,.09); --sheetline:#7c4dff;
+    --artline:#00a596;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
@@ -32,7 +37,11 @@
     display:flex;flex-direction:column;overflow:hidden}
 
   /* ---- app bar ---- */
-  header{display:flex;align-items:center;gap:9px;padding:8px 14px;
+  /* the bar is dark navy in both themes; in the light theme its controls take
+     the dark theme's colours so they read on it */
+  html[data-theme="light"] header{--ink:#e8e9ee;--muted:#9aa3b5;--panel:#1d2433;--panel2:#222a3b;
+    --line:#343e54;--accent2:#6aa8ff}
+  header{color:var(--ink);box-shadow:0 1px 0 rgba(0,0,0,.25);display:flex;align-items:center;gap:9px;padding:8px 14px;
     background:var(--bar);border-bottom:1px solid var(--barline);flex-wrap:nowrap;
     overflow:hidden;z-index:3}
   .brand{font-size:15px;font-weight:600;letter-spacing:.3px;white-space:nowrap;
@@ -71,6 +80,13 @@
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%238a90a2' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat:no-repeat;background-position:right 11px center;background-size:12px}
   header select:hover:not(:disabled){border-color:var(--accent2)}
+  /* the material's colour: a swatch drawn inside the material pill, just left of
+     its chevron. It's the select's next sibling, pulled back over the pill with a
+     negative margin (gap 9 + chevron 32 + swatch 16), and gives that room back on
+     the right; the pill pads its text clear of it (.has-chip). */
+  header select.has-chip{padding-right:54px}
+  .finchip{width:16px;height:16px;border-radius:4px;flex-shrink:0;margin:0 32px 0 -57px;
+    position:relative;z-index:1;cursor:pointer;box-shadow:0 0 0 1px rgba(0,0,0,.25) inset, 0 0 0 1px var(--line)}
   header select:disabled{opacity:.55;cursor:not-allowed}
   input[type=number]{width:78px}
   .icon{width:var(--ctl-h);height:var(--ctl-h);border-radius:50%;padding:0;border:1px solid var(--line);
@@ -97,15 +113,15 @@
   #bed .sheetrect{cursor:move}
 
   /* ---- page rail (multi-page PDFs) ---- */
-  .rail{position:absolute;left:0;top:0;bottom:0;z-index:2;width:var(--rail-w);
-    display:flex;flex-direction:column;min-height:0;
-    background:var(--panel);border-right:1px solid var(--line)}
-  .railhead{padding:12px 12px 8px;display:flex;flex-direction:column;gap:7px}
-  .railhead span{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  /* a floating card like Material/Artwork: as tall as its pages, scrolling past the window */
+  .rail{position:absolute;left:18px;top:var(--bed-top,18px);height:var(--bed-h,calc(100% - 36px));z-index:2;width:var(--rail-w);
+    display:flex;flex-direction:column;min-height:0;overflow:hidden;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-card)}
+  .railhead{padding:10px 12px 8px;display:flex;flex-direction:column;gap:7px}
   .railhead button{border-radius:999px;padding:5px 10px;font-size:12px}
   .railbtns{display:flex;gap:6px}
   .railbtns button{flex:1;padding:5px 8px}
-  .thumbs{flex:1;overflow:auto;padding:4px 12px 14px;display:flex;flex-direction:column;gap:16px}
+  .thumbs{flex:1 1 auto;min-height:0;overflow:auto;padding:4px 12px 14px;display:flex;flex-direction:column;gap:16px}
   /* one group per imported PDF, its name pinned above its pages */
   .docgrp{display:flex;flex-direction:column;gap:10px}
   .dochead{display:flex;align-items:center;gap:4px;position:sticky;top:-4px;z-index:1;
@@ -141,28 +157,43 @@
 
   /* a narrow window can't spare two full gutters: keep the rail's width on both
      sides, and let the controls float over the bed as they did before */
-  @media (max-width:1240px){ :root{--gutter:var(--rail-w)} }
+  @media (max-width:1240px){ :root{--gutter:calc(var(--rail-w) + 18px)} }
 
   .addhint{position:absolute;inset:24px;display:grid;place-items:center;pointer-events:none;z-index:4}
   .addhint .box{border:2px dashed var(--accent2);border-radius:14px;padding:22px 30px;font-size:15px;
     background:color-mix(in srgb, var(--panel) 85%, transparent)}
 
-  .drop{position:absolute;inset:24px;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;cursor:pointer;border-radius:12px;color:var(--muted)}
-  .drop .box{border:2px dashed var(--line);border-radius:14px;padding:56px 48px;text-align:center;
-    background:color-mix(in srgb, var(--panel) 55%, transparent)}
-  .drop.hot .box{border-color:var(--accent2);color:var(--ink)}
-  .drop .big{font-size:18px;color:var(--ink);margin:0 0 6px}
+  /* empty state: a floating card where the page list will appear, running to the
+     bottom; the whole window still takes a dropped file */
+  .drop{position:absolute;left:18px;top:var(--bed-top,18px);height:var(--bed-h,calc(100% - 36px));width:var(--rail-w);z-index:2;
+    display:flex;flex-direction:column;cursor:pointer;color:var(--muted);
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-card)}
+  .drop .box{flex:1;margin:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+    border:2px dashed var(--line);border-radius:9px;padding:16px 12px;text-align:center;
+    transition:border-color .12s, background .12s}
+  .drop .box svg{width:30px;height:30px;color:var(--accent2);margin-bottom:6px}
+  .drop:hover .box,.drop.hot .box{border-color:var(--accent2);color:var(--ink);
+    background:color-mix(in srgb, var(--accent2) 7%, transparent)}
+  .drop .big{font-size:15px;font-weight:600;color:var(--ink);margin:0}
+  .drop p{margin:0}
   .hint{color:var(--muted);font-size:12px}
 
   /* ---- floating controls (bottom-right) ---- */
   /* a column of separate cards: Material (the stock) above Artwork (the pages) */
-  .floating{position:absolute;right:18px;bottom:18px;width:var(--ctrl-w);
-    max-height:calc(100% - 36px);overflow:auto;z-index:2;
-    display:flex;flex-direction:column;gap:12px}
+  /* 8px of room inside the scroller so the cards' shadows aren't cropped to a hard edge */
+  /* spans the bed's height (plus the 8px shadow room either side); the last
+     card showing stretches so the column ends at the bed's bottom edge */
+  .floating{position:absolute;right:10px;top:calc(var(--bed-top,18px) - 8px);
+    height:calc(var(--bed-h,calc(100% - 36px)) + 16px);width:calc(var(--ctrl-w) + 16px);padding:8px;
+    overflow:auto;z-index:2;display:flex;flex-direction:column;gap:12px}
+  #placeSection:not([hidden]),#sheetSection:has(~ #placeSection[hidden]){flex-grow:1}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-    box-shadow:var(--shadow);padding:14px;flex-shrink:0}
-  .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px}
+    box-shadow:var(--shadow-card);padding:14px;flex-shrink:0}
+  /* every side card opens with a title bar in the app bar's colour */
+  .cardbar,.card h2{flex-shrink:0;background:var(--bar);color:#c9cfdb;border-bottom:1px solid var(--barline);
+    font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;line-height:1.3;
+    padding:9px 14px;border-radius:11px 11px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card h2{margin:-14px -14px 12px}
   .fld{display:flex;flex-direction:column;gap:3px;margin-bottom:8px}
   .fld label{font-size:11px;color:var(--muted)}
   .fld input{width:100%}
@@ -173,7 +204,8 @@
   #placeSection button,#sheetSection button{display:block;width:100%;margin-top:8px}
   .pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .pair .fld{margin-bottom:0}
-  #sheetSection h2 span{color:var(--sheetline)}
+  #sheetSection h2 span{color:#b18cff}   /* the sheet's colour, readable on the bar */
+  #placeSection h2 span{color:#6aa8ff}
   .placeInfo{font-size:11.5px;color:var(--muted);margin:10px 0 0;line-height:1.45}
   .warn{color:var(--danger);font-size:12px;margin:6px 0 0;white-space:pre-line}
   .note{color:var(--sheetline);font-size:12px;margin:6px 0 0;white-space:pre-line}
@@ -191,6 +223,114 @@
     background:var(--bed);border:1px solid var(--line);border-radius:8px;padding:9px;
     margin-top:4px;max-height:150px;overflow:auto;display:none}
   .out.on{display:block}
+
+  /* ---- visual picker (picker.js): a dropdown opens a full-window panel of cards ---- */
+  header select.picking{border-color:var(--accent2);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent2) 25%, transparent)}
+  .picker{position:fixed;left:0;right:0;bottom:0;z-index:20;overflow:auto;
+    background:color-mix(in srgb, var(--bg) 96%, transparent);backdrop-filter:blur(8px);
+    padding:22px 28px 48px;animation:pkIn .14s ease-out}
+  @keyframes pkIn{from{opacity:0}to{opacity:1}}
+  .pk-wrap{max-width:1320px;margin:0 auto;min-height:100%}
+  .pk-head{display:flex;align-items:center;gap:14px;margin:0 0 18px;flex-wrap:wrap}
+  .pk-head h1{font-size:22px;margin:0;font-weight:650}
+  .pk-head p{margin:0;color:var(--muted);font-size:13px}
+  .pk-head button{border-radius:999px;padding:6px 14px;font-size:12.5px}
+  .pk-head .pk-i{width:22px;height:22px;padding:0;border-radius:50%;font:italic 600 12px/1 Georgia,serif;
+    color:var(--muted);display:grid;place-items:center}
+  .pk-head .pk-i.on{color:#fff;background:var(--accent2);border-color:var(--accent2)}
+  .pk-info{margin:-6px 0 18px;padding:10px 14px;max-width:760px;font-size:12.5px;color:var(--muted);
+    background:var(--panel);border:1px solid var(--line);border-radius:10px}
+  .pk-info code{font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+  .pk-x{width:34px;height:34px;padding:0!important;display:grid;place-items:center;font-size:14px}
+  .pk-group{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin:22px 0 10px}
+  .pk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px}
+  .pk-grid-wide{grid-template-columns:repeat(auto-fill,minmax(340px,460px))}
+  .pk-card{padding:0;border-radius:14px;overflow:hidden;text-align:left;display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line);color:var(--ink);
+    transition:border-color .12s, box-shadow .12s}
+  .pk-card:hover{border-color:var(--accent2);box-shadow:var(--shadow)}
+  .pk-card:focus-visible{outline:2px solid var(--accent2);outline-offset:2px}
+  .pk-card.on{border-color:var(--accent2);box-shadow:0 0 0 2px var(--accent2)}
+  .pk-art svg{display:block;width:100%;aspect-ratio:4/3}
+  .pk-bedart{background:var(--panel2);padding:10px}
+  .pk-bedart svg{aspect-ratio:auto}
+  .pk-body{padding:11px 13px 13px;display:flex;flex-direction:column;gap:6px}
+  .pk-name{font-weight:620;font-size:14px}
+  .pk-sub{font-size:12px;color:var(--muted)}
+  .pk-note{font-size:11.5px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .pk-chips{display:flex;flex-wrap:wrap;gap:5px}
+  .pk-chip{font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px;background:var(--panel2);
+    border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .pk-chip.eng{color:var(--accent);border-color:color-mix(in srgb, var(--accent) 45%, transparent)}
+  .pk-chip.cut{color:var(--danger);border-color:color-mix(in srgb, var(--danger) 45%, transparent)}
+  .pk-chip.warn{color:var(--warn);border-color:color-mix(in srgb, var(--warn) 45%, transparent)}
+  .pk-bar{display:grid;grid-template-columns:44px 1fr 36px;align-items:center;gap:8px;font-size:11.5px;color:var(--muted)}
+  .pk-bar i{height:6px;border-radius:3px;background:var(--panel2);overflow:hidden}
+  .pk-bar b{display:block;height:100%;background:var(--accent2);border-radius:3px}
+  .pk-bar em{font-style:normal;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .pk-burn{grid-template-columns:44px 1fr 52px}
+  .pk-burn b{background:linear-gradient(90deg,#e0b47c,#8a4a1c,#2a1206)}
+  .pk-fin{font-weight:500;color:var(--muted);font-size:12.5px;margin-left:4px}
+  .pk-dots{display:flex;flex-wrap:wrap;gap:7px;margin:2px 0 2px}
+  .pk-dot{width:22px;height:22px;padding:0;border-radius:50%;border:2px solid var(--panel);
+    box-shadow:0 0 0 1px var(--line);cursor:pointer}
+  .pk-dot:hover{box-shadow:0 0 0 1.5px var(--accent2)}
+  .pk-dot.on{box-shadow:0 0 0 2px var(--accent2)}
+  .icon.picking{border-color:var(--accent2);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent2) 25%, transparent)}
+  /* settings: material list on the left, that material's colours on the right */
+  .st-grid{display:grid;grid-template-columns:230px 1fr;gap:24px;align-items:start}
+  .st-nav{display:flex;flex-direction:column;gap:4px;position:sticky;top:0}
+  .st-mat{display:flex;align-items:center;gap:10px;padding:6px 10px 6px 6px;border-radius:10px;
+    background:none;border:1px solid transparent;text-align:left;font-size:13px}
+  .st-mat svg{width:34px;height:26px;border-radius:5px;flex-shrink:0}
+  .st-mat span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .st-mat em{font-style:normal;font-size:11px;font-weight:600;color:var(--accent2)}
+  .st-mat:hover{background:var(--panel2)}
+  .st-mat.on{background:var(--panel);border-color:var(--accent2)}
+  .st-main .pk-group:first-child{margin-top:4px}
+  .st-fins{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+  .st-fin{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .st-fin > div:last-child{padding:8px 10px;display:flex;flex-direction:column;font-size:13px}
+  .st-fin small{color:var(--muted);font-size:11px}
+  .st-rows{display:flex;flex-direction:column;gap:10px}
+  .st-row{display:flex;align-items:end;gap:14px;flex-wrap:wrap;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;padding:10px 14px 10px 10px}
+  .st-prev{width:120px;border-radius:8px;overflow:hidden;flex-shrink:0;align-self:center}
+  .st-row label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+  .st-row input[type=text]{width:180px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+    border-radius:7px;padding:7px 9px;font:inherit;font-size:13px}
+  .st-row input[type=color]{width:64px;height:34px;padding:2px;border:1px solid var(--line);border-radius:7px;
+    background:var(--panel2);cursor:pointer}
+  .st-row .st-check{flex-direction:row;align-items:center;gap:6px;font-size:12.5px;color:var(--ink);height:34px}
+  .st-del{margin-left:auto;align-self:center;width:32px;height:32px;padding:0;border-radius:50%}
+  .st-del:hover{color:var(--danger);border-color:var(--danger)!important}
+  .st-err{flex-basis:100%;margin:0;color:var(--danger);font-size:12px}
+  .st-add{margin-top:12px;border-radius:999px;padding:8px 16px;font-size:13px}
+  @media (max-width:760px){ .st-grid{grid-template-columns:1fr} .st-nav{position:static;flex-direction:row;flex-wrap:wrap} }
+  .pk-photo{position:relative;background:linear-gradient(180deg,var(--panel2),var(--panel));aspect-ratio:16/10;display:grid;place-items:center}
+  .pk-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1}
+  .pk-machine-art{width:86%;height:auto}
+  /* thickness: one row per thickness, the slab drawn edge-on at real size */
+  .pk-list{display:flex;flex-direction:column;gap:10px}
+  .pk-row{flex-direction:row;align-items:center;gap:20px;padding:14px 18px}
+  .pk-mm{width:84px;flex-shrink:0;font-size:13px;color:var(--muted)}
+  .pk-mm b{font-size:24px;color:var(--ink);font-weight:650}
+  .pk-mm small{display:block;font-size:11px}
+  .pk-slab{flex:1;min-width:0;display:flex;align-items:center;min-height:20px}
+  .pk-slab svg{display:block;border-radius:1.5px;box-shadow:0 2px 6px rgba(0,0,0,.35)}
+  .pk-cmp{width:230px;flex-shrink:0;font-size:12px;color:var(--muted);line-height:1.9}
+  .pk-ref{display:flex;align-items:center;gap:16px;margin:0 18px 12px 122px;font-size:11.5px;color:var(--muted)}
+  .pk-ref span{white-space:nowrap}
+  .pk-cardedge{flex:1;max-width:420px;background:linear-gradient(90deg,#c9a24c,#e8c870);border-radius:1px}
+  .pk-cal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:0 0 18px;
+    display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+  .pk-cal p{margin:0;font-size:13px}
+  .pk-cal input{width:min(420px,100%)}
+  .pk-cardbox{border:2px dashed var(--accent2);border-radius:3.2mm;background:color-mix(in srgb, var(--accent2) 8%, transparent)}
+  @media (max-width:760px){
+    .picker{padding:16px 16px 40px}
+    .pk-row{flex-wrap:wrap}.pk-cmp{width:100%}.pk-ref{margin-left:0}
+  }
 </style>
 </head>
 <body>
@@ -202,6 +342,7 @@
   </div>
   <select id="machine" title="Machine model"></select>
   <select id="material"><option value="">— material —</option></select>
+  <span class="finchip" id="finishChip" role="button" hidden></span>
   <select id="thickness" title="Material thickness">
     <option value="">— thickness —</option>
     <option value="1">1 mm</option>
@@ -216,18 +357,21 @@
   </select>
   <select id="sheet" title="Material size — drawn on the bed from the origin corner"></select>
   <select id="preset" disabled><option value="">— preset —</option></select>
+  <div class="spacer"></div>
   <button class="send" id="sendBtn" disabled>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
     <span id="sendLbl">Send</span>
   </button>
-  <div class="spacer"></div>
+  <button class="icon" id="settingsBtn" title="Settings — material colours" aria-label="Settings">
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
   <button class="icon" id="themeBtn" title="Toggle light / dark">☀</button>
 </header>
 
 <main>
   <aside class="rail" id="rail" hidden>
+    <div class="cardbar" id="railCount"></div>
     <div class="railhead">
-      <span id="railCount"></span>
       <div class="railbtns">
         <button type="button" id="includeAll">Include all</button>
         <button type="button" id="addPdf" title="Add another PDF">+ PDF</button>
@@ -235,14 +379,16 @@
     </div>
     <div class="thumbs" id="thumbs"></div>
   </aside>
+  <div class="drop" id="drop">
+    <div class="cardbar">Artwork</div>
+    <div class="box">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M12 18v-6M9 15l3-3 3 3"/></svg>
+      <p class="big" id="dropBig">Drop PDFs</p>
+      <p class="hint" id="dropHint">or click to choose</p>
+    </div>
+  </div>
   <div class="bedwrap">
     <svg id="bed" preserveAspectRatio="xMidYMid meet"></svg>
-    <div class="drop" id="drop">
-      <div class="box">
-        <p class="big" id="dropBig">Drop PDFs here</p>
-        <p class="hint" id="dropHint">or click to choose · one file or several</p>
-      </div>
-    </div>
     <!-- shown while a file is dragged over the window with pages already on the bed -->
     <div class="addhint" id="addHint" hidden><div class="box">Drop to add another PDF</div></div>
   </div>
@@ -278,5 +424,6 @@
 </main>
 
 <script src="/app.js"></script>
+<script src="/picker.js"></script>
 </body>
 </html>
