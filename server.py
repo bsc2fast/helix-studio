@@ -31,6 +31,7 @@ import json
 import math
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import re
@@ -79,6 +80,7 @@ PREF_SPEC = {
     "sheet": ("text", 40),         # stock size id ("A3|L")
     "sheet_off": ("xy", None),     # where that sheet lies on the bed, mm
     "laser_host": ("host", 60),    # the laser adopted by a scan
+    "units": ("text", 4),          # "mm" or "in" — display only, everything stays mm
 }
 
 
@@ -135,7 +137,7 @@ def save_prefs(patch):
     return prefs
 
 
-# Your own material colours, added on the Settings page beside the built-in
+# Your own material colours and stock sizes, added on the Settings page beside the built-in
 # ones (which live in the front-end and can't be edited). Gitignored, like
 # config.json, so a `git pull` never touches them.
 FINISHES_PATH = os.path.join(HERE, "finishes.json")
@@ -143,7 +145,8 @@ HEX = re.compile(r"#[0-9a-fA-F]{6}")
 
 
 def clean_finishes(data):
-    """Keep well-formed entries only: {material, name, base, mark, see_through}."""
+    """Keep well-formed entries only — colours {material, name, base, mark,
+    see_through, text?} and sizes {material, name, w, h} (mm, 1–2000)."""
     out = []
     items = data.get("custom") if isinstance(data, dict) else None
     for c in (items if isinstance(items, list) else [])[:500]:
@@ -155,9 +158,27 @@ def clean_finishes(data):
                 and 0 < len(name.strip()) <= 40 and isinstance(base, str) and HEX.fullmatch(base)
                 and isinstance(mark, str) and HEX.fullmatch(mark)):
             continue
-        out.append({"material": mat, "name": name.strip(), "base": base.lower(), "mark": mark.lower(),
-                    "see_through": bool(c.get("see_through"))})
-    return {"custom": out}
+        item = {"material": mat, "name": name.strip(), "base": base.lower(), "mark": mark.lower(),
+                "see_through": bool(c.get("see_through"))}
+        text = c.get("text")   # the contrast ink, worked out by the page from `base`
+        if isinstance(text, str) and HEX.fullmatch(text):
+            item["text"] = text.lower()
+        out.append(item)
+    sizes = []
+    items = data.get("sizes") if isinstance(data, dict) else None
+    for z in (items if isinstance(items, list) else [])[:500]:
+        if not isinstance(z, dict):
+            continue
+        mat, name = z.get("material"), z.get("name")
+        try:
+            w, h = float(z.get("w")), float(z.get("h"))
+        except (TypeError, ValueError):
+            continue
+        if not (isinstance(mat, str) and 0 < len(mat) <= 120 and isinstance(name, str)
+                and 0 < len(name.strip()) <= 40 and "|" not in name and 1 <= w <= 2000 and 1 <= h <= 2000):
+            continue
+        sizes.append({"material": mat, "name": name.strip(), "w": round(w, 1), "h": round(h, 1)})
+    return {"custom": out, "sizes": sizes}
 
 
 def load_finishes():
@@ -165,7 +186,7 @@ def load_finishes():
         with open(FINISHES_PATH) as f:
             return clean_finishes(json.load(f))
     except (OSError, ValueError):
-        return {"custom": []}
+        return {"custom": [], "sizes": []}
 
 
 def save_finishes(data):
@@ -322,9 +343,34 @@ def load_page(s, n):
                                     max(bbox[2], vb[2]), max(bbox[3], vb[3]))
     pg = {"rgb": rgb, "preview_png": buf.getvalue(),
           "bbox": bbox, "vectors": _simplify(allv),
-          "size_mm": (rgb.size[0] / PREVIEW_DPI * 25.4, rgb.size[1] / PREVIEW_DPI * 25.4)}
+          "size_mm": (rgb.size[0] / PREVIEW_DPI * 25.4, rgb.size[1] / PREVIEW_DPI * 25.4),
+          "images": page_images(s["pdf_path"], n)}
     s["pages"][n] = pg
     return pg
+
+
+def page_images(pdf_path, n):
+    """The bitmap images placed on page n, with their effective resolution as
+    placed (pdfimages' x/y-ppi). Display only — it tells the user whether a
+    page is pure vector or carries pictures, and how sharp those will burn.
+    Soft masks are the alpha of an image already listed, so they're skipped."""
+    exe = shutil.which("pdfimages")
+    if not exe:
+        return None   # unknown, not "none"
+    try:
+        out = subprocess.run([exe, "-list", "-f", str(n), "-l", str(n), pdf_path],
+                             capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    imgs = []
+    for line in out.splitlines()[2:]:
+        f = line.split()
+        if len(f) >= 14 and f[2] in ("image", "stencil"):
+            try:
+                imgs.append({"w": int(f[3]), "h": int(f[4]), "ppi": min(int(f[12]), int(f[13]))})
+            except ValueError:
+                pass
+    return imgs
 
 
 def page_json(sid, n, pg):
@@ -338,6 +384,7 @@ def page_json(sid, n, pg):
             "w_mm": round(b[2] - b[0], 2), "h_mm": round(b[3] - b[1], 2),
         } if b else None,
         "vectors": pg["vectors"],
+        "images": pg.get("images"),
     }
 
 

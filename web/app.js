@@ -1,8 +1,10 @@
 // Helix Studio — front-end
 const $ = s => document.querySelector(s);
 const SVGNS = "http://www.w3.org/2000/svg";
-const GUT = 40;   // mm gutter (top+left) for rulers
-const PAD = 10;   // mm padding (right+bottom)
+// Display only: a ruler on every side of the bed picture, so an equal margin
+// all round. None of this reaches the laser — bed geometry comes from the
+// machine config, and placement is always measured from the home corner.
+const GUT = 34;   // mm margin on each side, for the rulers
 const state = {
   materials: [], machine: null, laserHost: "192.168.1.6",
   docs: [],           // imported PDFs, in the order they arrived:
@@ -93,6 +95,7 @@ async function boot() {
     fetch("/api/prefs").then(r => r.json()).catch(() => ({})),
   ]);
   state.prefs = prefs || {};
+  state.units = state.prefs.units === "in" ? "in" : "mm";
   state.machine = cfg.machine;
   state.laserHost = cfg.laser_host;
   renderLaser();
@@ -103,7 +106,7 @@ async function boot() {
   restore(msel, state.prefs.machine);
   msel.onchange = () => savePrefs({ machine: msel.value });
   const m = cfg.machine;
-  state.vb = { w: m.bed_w_mm + GUT + PAD, h: m.bed_h_mm + GUT + PAD };
+  state.vb = { w: m.bed_w_mm + 2 * GUT, h: m.bed_h_mm + 2 * GUT };
   $("#bed").setAttribute("viewBox", `${-GUT} ${-GUT} ${state.vb.w} ${state.vb.h}`);
   renderSheetOptions();
   buildBed();
@@ -118,9 +121,11 @@ async function boot() {
   if (!restore(sel, state.prefs.material)) firstOption(sel);
   state.finish = state.prefs.finish || null;
   syncFinish();
+  refreshSheets();   // the material is known now: offer its own sizes too
   if (!restore($("#thickness"), state.prefs.thickness)) firstOption($("#thickness"));
   renderPresets();
   drawSheet();   // the bed was drawn before the material was known: paint the stock now
+  applyUnits();
   fitBar();
 }
 
@@ -242,12 +247,44 @@ const SHEETS = [
   ["ANSI", [["Letter", 279.4, 215.9], ["Legal", 355.6, 215.9], ["Tabloid", 431.8, 279.4]]],
 ];
 const mmTxt = v => (Math.round(v * 10) / 10).toString();
+// ---------- display units (Settings: mm ↔ in) ----------
+// Display and entry only: every length is kept, saved and sent to the laser in
+// mm; inches exist only on screen.
+const INCH = 25.4;
+const inches = () => state.units === "in";
+const unit = () => inches() ? "in" : "mm";
+// a length for reading: mm to 0.1, inches to 0.01 (trailing zeros dropped)
+const len = mm => inches() ? String(+(mm / INCH).toFixed(2)) : mmTxt(mm);
+const dims = (w, h) => `${len(w)}×${len(h)} ${unit()}`;
+const fromLen = v => inches() ? v * INCH : v;   // what was typed → mm
+// fill a number box from mm — but never while it's being typed in
+function setLen(input, mm) {
+  if (document.activeElement === input) return;
+  input.value = inches() ? +(mm / INCH).toFixed(2) : Math.round(mm);
+}
+// switch units: labels, steps, rulers, every readout
+function applyUnits() {
+  document.querySelectorAll(".unitlbl").forEach(el => { el.textContent = unit(); });
+  ["#sheetx", "#sheety", "#offx", "#offy"].forEach(sel => { $(sel).step = inches() ? "0.05" : "1"; });
+  [...$("#thickness").options].forEach(o => {
+    if (o.value) o.text = inches() ? `${+(o.value / INCH).toFixed(3)} in` : `${o.value} mm`;
+  });
+  fitSelect($("#thickness"));
+  if (bedEls) { bedEls.rulers.innerHTML = ""; drawRulers(bedEls.rulers, state.machine); }
+  refreshSheets(); drawSheet(); updatePlacement();
+}
+// the built-in sizes, plus the material's own (Settings → Your sizes), listed
+// only while that material is chosen
+function sheetGroups() {
+  const look = window.HSLook, mine = look && look.sizesOf ? look.sizesOf($("#material").value) : [];
+  return mine.length ? SHEETS.concat([["Your sizes", mine]]) : SHEETS;
+}
 function sheetChoices() {
   const m = state.machine, fits = (w, h) => w <= m.bed_w_mm + 0.5 && h <= m.bed_h_mm + 0.5;
-  return SHEETS.map(([group, list]) => [group, list.flatMap(([name, L, S]) => {
+  return sheetGroups().map(([group, list]) => [group, list.flatMap(([name, L, S]) => {
     const out = [];
-    if (fits(L, S)) out.push({ id: name + "|L", name, w: L, h: S, label: `${name} · ${mmTxt(L)}×${mmTxt(S)}` });
-    if (L !== S && fits(S, L)) out.push({ id: name + "|P", name, w: S, h: L, label: `${name} portrait · ${mmTxt(S)}×${mmTxt(L)}` });
+    if (fits(L, S)) out.push({ id: name + "|L", name, w: L, h: S, label: `${name} · ${len(L)}×${len(S)}` });
+    if (L !== S && fits(S, L)) out.push({ id: name + "|P", name, w: S, h: L, label: `${name} portrait · ${len(S)}×${len(L)}` });
     return out;
   })]).filter(([, list]) => list.length);
 }
@@ -271,9 +308,29 @@ function renderSheetOptions() {
     }
     localStorage.removeItem("hs-sheet"); localStorage.removeItem("hs-sheet-off");
   } catch (e) {}
+  state.sheetWant = state.prefs.sheet;
   if (!restore(sel, state.prefs.sheet)) firstOption(sel);
   const off = state.prefs.sheet_off;
   if (off) Object.assign(state.sheetOff, { x: +off.x || 0, y: +off.y || 0 });
+}
+// rebuild the size list when the material (or your sizes) change. The size you
+// last picked comes back if it's offered again — a size of your own reappears
+// when you return to its material — else the current one stays, else the first.
+// Only a pick of yours is saved; a fallback shown meanwhile is not.
+function refreshSheets() {
+  if (!state.machine) return;
+  const sel = $("#sheet"), was = sel.value;
+  sel.innerHTML = '<option value="">— material size —</option>';
+  sheetChoices().forEach(([group, list]) => {
+    const og = document.createElement("optgroup");
+    og.label = group;
+    list.forEach(s => og.appendChild(new Option(s.label, s.id)));
+    sel.appendChild(og);
+  });
+  if (state.sheetWant === "") sel.value = "";   // "Clear": no stock, on purpose
+  else if (!restore(sel, state.sheetWant) && !restore(sel, was)) firstOption(sel);
+  fitSelect(sel);
+  if (sel.value !== was) { drawSheet(); updatePlacement(); }
 }
 function currentSheet() {
   const v = $("#sheet").value;
@@ -307,19 +364,20 @@ function drawSheet() {
       bedEls.sheetTex.setAttribute(k, v);
     bedEls.sheetTex.innerHTML = look.texture(mat, s.w / 3, s.h / 3, state.finish);
     bedEls.sheetTex.removeAttribute("hidden");
+    // the stock shows as itself: no purple frame (a faint one on hover, to grab)
+    // and no label on it — its name and size are on the Material card
     bedEls.sheetRect.setAttribute("fill", "transparent");
+    bedEls.sheetRect.classList.add("tex");
   } else {
     bedEls.sheetTex.setAttribute("hidden", "hidden");
     bedEls.sheetRect.setAttribute("fill", "var(--sheet)");
+    bedEls.sheetRect.classList.remove("tex");
   }
-  bedEls.sheetLbl.setAttribute("x", s.x + s.w - 6);
-  bedEls.sheetLbl.setAttribute("y", s.y + s.h - 7);
-  bedEls.sheetLbl.textContent = `${s.name} · ${mmTxt(s.w)} × ${mmTxt(s.h)} mm`;
   bedEls.sheet.removeAttribute("hidden");
   $("#sheetWhich").textContent = "· " + s.name;
-  $("#sheetx").value = s.x;
-  $("#sheety").value = s.y;
-  $("#sheetInfo").textContent = `${mmTxt(s.w)}×${mmTxt(s.h)} mm at (${s.x}, ${s.y}) · reaches (${mmTxt(s.x + s.w)}, ${mmTxt(s.y + s.h)})`;
+  setLen($("#sheetx"), s.x);
+  setLen($("#sheety"), s.y);
+  $("#sheetInfo").textContent = `${dims(s.w, s.h)} at (${len(s.x)}, ${len(s.y)}) · reaches (${len(s.x + s.w)}, ${len(s.y + s.h)})`;
   const rot = sheetTurn(s), btn = $("#sheetRotate");
   $("#sheetOrient").textContent = s.id.endsWith("|P") ? "portrait" : "landscape";
   btn.disabled = !rot.ok;
@@ -340,7 +398,7 @@ function sheetTurn(s) {
   const overX = s.x + alt.w - m.bed_w_mm, overY = s.y + alt.h - m.bed_h_mm;
   if (overX > 0.01 || overY > 0.01) {
     const need = [];
-    const lim = (axis, v) => v <= 0 ? `${axis} = 0` : `${axis} ≤ ${v}`;
+    const lim = (axis, v) => v <= 0 ? `${axis} = 0` : `${axis} ≤ ${len(v)} ${unit()}`;
     if (overX > 0.01) need.push(lim("X", Math.floor(m.bed_w_mm - alt.w)));
     if (overY > 0.01) need.push(lim("Y", Math.floor(m.bed_h_mm - alt.h)));
     return { ok: false, alt, why: `turned, the ${name} would run off the bed at (${s.x}, ${s.y}). ` +
@@ -349,9 +407,9 @@ function sheetTurn(s) {
   return { ok: true, alt };
 }
 const moveSheet = () => { drawSheet(); updatePlacement(); saveSheet(); };
-$("#sheet").onchange = moveSheet;
-$("#sheetx").oninput = e => { state.sheetOff.x = +e.target.value || 0; moveSheet(); };
-$("#sheety").oninput = e => { state.sheetOff.y = +e.target.value || 0; moveSheet(); };
+$("#sheet").onchange = () => { state.sheetWant = $("#sheet").value; moveSheet(); };
+$("#sheetx").oninput = e => { state.sheetOff.x = fromLen(+e.target.value || 0); moveSheet(); };
+$("#sheety").oninput = e => { state.sheetOff.y = fromLen(+e.target.value || 0); moveSheet(); };
 $("#sheetRotate").onclick = () => {
   const s = sheetBox(), rot = s && sheetTurn(s);
   if (rot && rot.ok) { $("#sheet").value = rot.alt.id; moveSheet(); }
@@ -622,7 +680,7 @@ function buildItemEls(it) {
   ig.appendChild(img); g.appendChild(ig);
   // engrave wash (green) + cut-line overlay (red vectors)
   const engwash = mk("rect", { fill: "rgba(123,216,143,.28)", "pointer-events": "none", hidden: "hidden" });
-  const cutlines = mk("g", { fill: "none", "stroke-width": 0.9, "stroke-linejoin": "round",
+  const cutlines = mk("g", { class: "cutlines", fill: "none", "stroke-linejoin": "round", "stroke-linecap": "round",
     "pointer-events": "none", hidden: "hidden" });
   (pd.vectors || []).forEach(pl =>
     cutlines.appendChild(mk("polyline", { points: pl.map(p => p[0] + "," + p[1]).join(" "), fill: "none" })));
@@ -706,37 +764,48 @@ function buildBed() {
   const sheetTex = mk("svg", { "pointer-events": "none", preserveAspectRatio: "none", opacity: 0.9 });
   const sheetRect = mk("rect", { class: "sheetrect", rx: 2, fill: "var(--sheet)", stroke: "var(--sheetline)",
     "stroke-width": 1.2, "pointer-events": "all" });
-  const sheetLbl = mk("text", { "font-size": 10, "text-anchor": "end", fill: "var(--sheetline)", "pointer-events": "none",
-    stroke: "var(--bed)", "stroke-width": 3, "paint-order": "stroke" });
-  sheet.append(sheetTex, sheetRect, sheetLbl);
+  sheet.append(sheetTex, sheetRect);
   bed.appendChild(sheet);
   const B = bounds();  // dashed safety boundary = allowed placement area
   bed.appendChild(mk("rect", {
     x: B.minX, y: B.minY, width: B.maxX - B.minX, height: B.maxY - B.minY,
     fill: "none", stroke: "var(--warn, #ffb454)", "stroke-dasharray": "8 6", "stroke-width": 1.5,
   }));
-  drawRulers(bed, m);
+  const rulers = mk("g", {});
+  bed.appendChild(rulers);
+  drawRulers(rulers, m);
   bed.appendChild(mk("circle", { cx: 0, cy: 0, r: 6, fill: "var(--accent2)" }));
 
   const items = mk("g", {});
   const overlaps = mk("g", { "pointer-events": "none" });   // red wash where pages collide
   bed.append(items, overlaps);
-  bedEls = { defs, items, overlaps, sheet, sheetTex, sheetRect, sheetLbl };
+  bedEls = { defs, items, overlaps, sheet, sheetTex, sheetRect, rulers };
   dragWith(sheetRect, () => state.sheetOff, (x, y) => { state.sheetOff = { x, y }; moveSheet(); });
   drawSheet();
 }
 
+// Rulers on all four sides. Top and left count from the laser's home corner
+// (top-left), as X/Y do everywhere else; bottom and right count from the
+// opposite corner (bottom-right) — X leftwards, Y upwards — so a distance
+// from either far edge can be read off directly.
 function drawRulers(bed, m) {
-  const majorX = 100, majorY = 100, minor = 50, fs = 11;
-  for (let x = 0; x <= m.bed_w_mm + 1; x += minor) {
-    const major = x % majorX === 0;
-    bed.appendChild(mk("line", { x1: x, y1: major ? -12 : -7, x2: x, y2: 0, stroke: "var(--bedline)", "stroke-width": 1 }));
-    if (major) bed.appendChild(Object.assign(mk("text", { x: x, y: -16, "font-size": fs, "text-anchor": "middle", fill: "var(--muted)" }), { textContent: x }));
+  // mm: a tick every 50, labelled every 100. Inches: a tick every inch, labelled every 4
+  const W = m.bed_w_mm, H = m.bed_h_mm, fs = 10, off = 13;
+  const step = inches() ? INCH : 50, every = inches() ? 4 : 2;
+  const tick = (x1, y1, x2, y2) => bed.appendChild(mk("line", { x1, y1, x2, y2, stroke: "var(--bedline)", "stroke-width": 1 }));
+  const label = (x, y, anchor, v) => bed.appendChild(Object.assign(
+    mk("text", { x, y, "font-size": fs, "text-anchor": anchor, fill: "var(--muted)" }), { textContent: v }));
+  for (let i = 0; i * step <= W + 1; i++) {
+    const v = i * step, big = i % every === 0, n = Math.round(inches() ? i : v), tl = big ? 10 : 6;
+    tick(v, -tl, v, 0);                          // top: X from the left
+    tick(W - v, H, W - v, H + tl);               // bottom: X from the right
+    if (big) { label(v, -off, "middle", n); label(W - v, H + off + fs * 0.72, "middle", n); }
   }
-  for (let y = 0; y <= m.bed_h_mm + 1; y += minor) {
-    const major = y % majorY === 0;
-    bed.appendChild(mk("line", { x1: major ? -12 : -7, y1: y, x2: 0, y2: y, stroke: "var(--bedline)", "stroke-width": 1 }));
-    if (major) bed.appendChild(Object.assign(mk("text", { x: -16, y: y + fs / 3, "font-size": fs, "text-anchor": "end", fill: "var(--muted)" }), { textContent: y }));
+  for (let i = 0; i * step <= H + 1; i++) {
+    const v = i * step, big = i % every === 0, n = Math.round(inches() ? i : v), tl = big ? 10 : 6;
+    tick(-tl, v, 0, v);                          // left: Y from the top
+    tick(W, H - v, W + tl, H - v);               // right: Y from the bottom
+    if (big) { label(-off, v + fs / 3, "end", n); label(W + off, H - v + fs / 3, "start", n); }
   }
 }
 
@@ -791,7 +860,7 @@ function updatePlacement() {
     E.tag.textContent = pageTag(it);
     if (multi) E.tag.removeAttribute("hidden"); else E.tag.setAttribute("hidden", "hidden");
     if (!c) problems.push(`⚠ No printable artwork detected on ${pageName(it)}.`);
-    else if (!it.inBounds) problems.push(`⚠ ${multi ? cap(pageName(it)) + " is i" : "I"}nside the ${B.s} mm safety margin. Move it within the dashed boundary.`);
+    else if (!it.inBounds) problems.push(`⚠ ${multi ? cap(pageName(it)) + " is i" : "I"}nside the ${len(B.s)} ${unit()} safety margin. Move it within the dashed boundary.`);
     if (S && c && (ox < S.x - 0.01 || oy < S.y - 0.01 ||
                    ox + d.w > S.x + S.w + 0.01 || oy + d.h > S.y + S.h + 0.01))
       notes.push(`${multi ? cap(pageName(it)) : "The artwork"} runs past the ${S.name} sheet.`);
@@ -812,8 +881,11 @@ function updatePlacement() {
       problems.push(`⚠ ${cap(pageName(a))} and ${pageName(b)} overlap — drag them apart.`);
     }
   state.items.forEach(it => {
-    // a dotted frame in its own colour: the page's extent, without hiding the burn
+    // a dotted frame in its own colour: the page's extent. It shows only under the
+    // pointer (or while dragging) so it never muddies the artwork — except a page
+    // that's out of bounds or overlapping, whose red frame stays as the warning
     it.els.art.setAttribute("stroke", it.bad ? "var(--danger)" : "var(--artline)");
+    it.els.art.classList.toggle("bad", !!it.bad);
     it.els.art.setAttribute("stroke-width", it === state.active ? 1.8 : 1.1);
     it.els.art.setAttribute("stroke-dasharray", it === state.active ? "0.1 3.2" : "0.1 2.6");
     it.els.art.setAttribute("stroke-linecap", "round");
@@ -827,22 +899,24 @@ function updatePlacement() {
   ["#offx", "#offy", "#rotateBtn", "#centerBtn"].forEach(s => { $(s).disabled = !it; });
   if (it) {
     const d = artDims(it);
-    $("#offx").value = Math.round(it.off.x);
-    $("#offy").value = Math.round(it.off.y);
+    setLen($("#offx"), it.off.x);
+    setLen($("#offy"), it.off.y);
     $("#rotLbl").textContent = it.rot + "°";
+    $("#artChips").innerHTML = artChips(it.pd);
     const turn = artTurn(it);
     $("#rotateBtn").disabled = !turn.ok;
     $("#rotateBtn").title = turn.ok ? `Rotate to ${(it.rot + 90) % 360}°` : turn.why;
     $("#rotWhy").hidden = turn.ok;
     $("#rotWhy").textContent = turn.ok ? "" : "Can't rotate: " + turn.why;
     $("#placeInfo").textContent =
-      `Artwork ${d.w.toFixed(0)}×${d.h.toFixed(0)} mm at (${it.off.x.toFixed(0)}, ${it.off.y.toFixed(0)}) · ` +
-      `reaches (${(it.off.x + d.w).toFixed(0)}, ${(it.off.y + d.h).toFixed(0)}) · bed ${state.machine.bed_w_mm}×${state.machine.bed_h_mm}` +
+      `Artwork ${dims(d.w, d.h)} at (${len(it.off.x)}, ${len(it.off.y)}) · ` +
+      `reaches (${len(it.off.x + d.w)}, ${len(it.off.y + d.h)}) · bed ${dims(state.machine.bed_w_mm, state.machine.bed_h_mm)}` +
       (multi ? ` · ${state.items.length} on the bed` +
         (manyDocs() ? ` from ${new Set(state.items.map(o => o.doc)).size} files` : "") : "");
   } else {
     $("#rotWhy").hidden = true;
     $("#placeInfo").textContent = "No pages on the bed — include one from the page list.";
+    $("#artChips").innerHTML = "";
   }
   const warn = $("#boundsWarn");
   warn.hidden = !problems.length;
@@ -850,16 +924,41 @@ function updatePlacement() {
   const note = $("#sheetNote");
   note.hidden = !notes.length;
   note.textContent = notes.join("\n");
+  // the ⚠ in the Artwork title: red when Send is blocked, amber for advice
+  const alert = $("#artAlert");
+  alert.hidden = !problems.length && !notes.length;
+  alert.classList.toggle("bad", problems.length > 0);
+  alert.setAttribute("aria-label", [...problems, ...notes].join(" "));
 
-  const reachable = state.laser === "online";
-  $("#sendBtn").disabled = state.sending || !state.items.length || problems.length > 0 ||
-    !currentOp() || !reachable;
-  $("#sendBtn").title = reachable ? "" : "The laser isn't reachable — scan for it first";
+  // Send says on hover what is holding it back — the first blocker, in order
+  const why = state.sending ? "Sending…"
+    : !state.items.length ? "Put a page on the bed first"
+    : problems.length ? "Fix the placement first — see the Artwork card"
+    : !currentOp() ? "Choose a preset first"
+    : state.laser !== "online" ? `The laser isn't reachable at ${state.laserHost} — click Scan to find it`
+    : "";
+  $("#sendBtn").disabled = !!why;
+  $("#sendBtn").title = why;
   renderRail();
 }
 
-$("#offx").oninput = e => { if (state.active) { state.active.off.x = +e.target.value || 0; updatePlacement(); } };
-$("#offy").oninput = e => { if (state.active) { state.active.off.y = +e.target.value || 0; updatePlacement(); } };
+// what the page is made of: vector paths, and/or pictures at their resolution as
+// placed. Below 150 dpi a picture will burn visibly blocky, so it's flagged.
+function artChips(pd) {
+  const imgs = pd.images, vec = (pd.vectors || []).length > 0;
+  if (!imgs) return "";   // pdfimages unavailable: say nothing rather than guess
+  const chip = (t, cls, tip) => `<span class="pk-chip ${cls}" title="${tip}">${t}</span>`;
+  let out = vec || !imgs.length ? chip("Vector", "eng", "Paths and text: sharp at any size") : "";
+  if (imgs.length) {
+    const ppi = Math.min(...imgs.map(i => i.ppi)), low = ppi < 150;
+    out += chip(`${ppi} dpi`, low ? "warn" : "",
+      `${imgs.length} picture${imgs.length > 1 ? "s" : ""} on this page; the lowest is ${ppi} dpi as placed` +
+      (low ? " — expect it to burn blocky" : ""));
+  }
+  return out;
+}
+$("#offx").oninput = e => { if (state.active) { state.active.off.x = fromLen(+e.target.value || 0); updatePlacement(); } };
+$("#offy").oninput = e => { if (state.active) { state.active.off.y = fromLen(+e.target.value || 0); updatePlacement(); } };
 // the same rule as the material: a 90° turn about the artwork's top-left
 // corner swaps its width and height, and is only offered when the turned
 // artwork still sits inside the safety boundary from where it is now
@@ -867,12 +966,12 @@ function artTurn(it) {
   const d = artDims(it), B = bounds();
   if (!it.pd.content_mm) return { ok: false, why: "there is no artwork on this page" };
   if (d.h > B.maxX - B.minX + 0.01 || d.w > B.maxY - B.minY + 0.01)
-    return { ok: false, why: `turned, the ${d.h.toFixed(0)}×${d.w.toFixed(0)} mm artwork is bigger than the safe area` };
+    return { ok: false, why: `turned, the ${dims(d.h, d.w)} artwork is bigger than the safe area` };
   const need = [];
-  if (it.off.x + d.h > B.maxX + 0.01) need.push(`X ≤ ${Math.floor(B.maxX - d.h)}`);
-  if (it.off.y + d.w > B.maxY + 0.01) need.push(`Y ≤ ${Math.floor(B.maxY - d.w)}`);
+  if (it.off.x + d.h > B.maxX + 0.01) need.push(`X ≤ ${len(Math.floor(B.maxX - d.h))} ${unit()}`);
+  if (it.off.y + d.w > B.maxY + 0.01) need.push(`Y ≤ ${len(Math.floor(B.maxY - d.w))} ${unit()}`);
   if (need.length)
-    return { ok: false, why: `turned, it would cross the safety boundary at (${Math.round(it.off.x)}, ${Math.round(it.off.y)}). Move it to ${need.join(" and ")} first.` };
+    return { ok: false, why: `turned, it would cross the safety boundary at (${len(it.off.x)}, ${len(it.off.y)}). Move it to ${need.join(" and ")} first.` };
   return { ok: true };
 }
 $("#rotateBtn").onclick = () => {
@@ -943,6 +1042,14 @@ function syncFinish() {
   }
   sel.title = on ? `${sel.value} — ${shown}` : "";
   fitSelect(sel);
+  // the Material card's title bar wears the stock's colour, its text in an ink
+  // that reads on it
+  const bar = $("#sheetSection h2");
+  if (look && sel.value && fins.length) {
+    bar.style.background = look.swatch(sel.value, shown);
+    bar.style.color = look.look(sel.value, shown).text;
+    bar.classList.add("matbar");
+  } else { bar.style.background = bar.style.color = ""; bar.classList.remove("matbar"); }
 }
 // the swatch sits over the pill: a click on it is a click on the material
 $("#finishChip").onmousedown = e => {
@@ -951,6 +1058,7 @@ $("#finishChip").onmousedown = e => {
 };
 $("#material").onchange = () => {
   syncFinish();
+  refreshSheets();
   savePrefs({ material: $("#material").value, finish: state.finish });
   renderPresets(); drawSheet();
 };
@@ -1031,15 +1139,23 @@ async function renderBurn(it) {
 // redraw every page for the current material, colour and preset
 function highlight() {
   const op = currentOp(), isCut = op && op.type === "cut";
-  const { L, t } = burnLook();
+  const { L } = burnLook();
+  // the Artwork card's title bar wears the colour the burn will leave
+  const bar = $("#placeSection h2"), look = window.HSLook;
+  if (look && $("#material").value) {
+    bar.style.background = L.mark; bar.style.color = look.ink(L.mark); bar.classList.add("matbar");
+    $("#placeSection").style.setProperty("--burn", L.mark);
+    $("#placeSection").style.setProperty("--burn-ink", look.ink(L.mark));
+  } else { bar.style.background = bar.style.color = ""; bar.classList.remove("matbar"); }
   state.items.forEach(it => {
     const els = it.els;
     els.engwash.setAttribute("hidden", "hidden");
     // a cut burns only the vectors: the raster isn't engraved, so it isn't shown
     if (isCut) els.img.setAttribute("visibility", "hidden"); else els.img.removeAttribute("visibility");
-    els.cutlines.setAttribute("stroke", L.dark ? "#d8d4cf" : "#1a0f08");
-    els.cutlines.setAttribute("stroke-width", (0.15 + 0.35 * t).toFixed(2));
-    els.cutlines.setAttribute("stroke-opacity", 0.9);
+    // the cut path in the colour the laser leaves on this stock (a charred brown
+    // edge on wood, frosted white on acrylic…), at a fixed on-screen width,
+    // gently pulsing (index.html)
+    els.cutlines.setAttribute("stroke", L.mark);
     if (isCut) els.cutlines.removeAttribute("hidden"); else els.cutlines.setAttribute("hidden", "hidden");
     if (!isCut) renderBurn(it);
   });
@@ -1047,6 +1163,7 @@ function highlight() {
 // picker.js calls this when your own colours load or change
 window.hsFinishesChanged = () => {
   syncFinish();
+  refreshSheets();
   if ($("#material").value && state.finish) savePrefs({ finish: state.finish });
   drawSheet(); highlight();
 };

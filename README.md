@@ -132,9 +132,11 @@ you only lose the dropdown positions, and `config.json` always wins over it. The
 **preset is not remembered** — a new session starts on the material's first
 preset, so check power and speed for the job in front of you.
 
-Material colours you add on the **Settings** page (⚙) are kept in a
-`finishes.json` beside it, also gitignored. The built-in colours can't be
-edited; yours sit beside them.
+Material colours and stock sizes you add on the **Settings** page (⚙) are
+kept in a `finishes.json` beside it, also gitignored. The built-in ones can't
+be edited; yours sit beside them, and a size of your own is offered only for
+its material. Settings also switches the display between **mm and inches** —
+display and entry only: everything is stored and sent in mm.
 
 > Start conservative with `usable_*`. Widen it only after you have watched the
 > head travel to that edge and clear the rails.
@@ -179,10 +181,15 @@ as environment variables.
    stay open, listed down the left, and one job can mix pages from any of them.
 2. **Place it.** Drag the artwork around the bed picture, or type X/Y in mm.
    X/Y is measured from the laser's home corner (top-left). `Rotate` turns it
-   in 90° steps, `Center` centres it in the safe area. Each page has a dotted
-   outline, which turns red once it crosses the dashed safety boundary — and
-   **Send** is disabled while it is red. **Delete** takes the selected page off
-   the bed. Pick a **material
+   in 90° steps, `Center` centres it in the safe area. Hovering a page shows its
+   dotted outline; it turns red, and stays, once the page crosses the dashed
+   safety boundary or overlaps another — and **Send** is disabled while it is
+   red (hover **Send** to see what's holding it back). A pulsing **⚠** in the
+   Artwork card's title collects the warnings; hover it to read them.
+   **Delete** takes the selected page off the bed. The Artwork card also says
+   whether a page is **Vector** and, for pictures in it, their resolution as
+   placed (amber below 150 dpi). Rulers run along all four sides: top/left
+   from the home corner, bottom/right from the opposite one. Pick a **material
    size** (A4, Arch B, Letter… — only sizes that fit the bed are listed) to see
    your stock drawn on the bed; drag it, or type its X/Y in the **Material**
    card, to match where the sheet really lies. `Rotate` on either card is only

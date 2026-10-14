@@ -136,7 +136,8 @@ function finishOf(name) {
 }
 function lookOf(name, finish = finishOf(name)) {
   const B = baseOf(name), i = Math.max(0, B.finishes.findIndex(f => f.n === finish));
-  return { ...B, ...B.finishes[i], key: `${lookKey(name) ? slug(lookKey(name)) : "fallback"}-${i}`,
+  return { ...B, ...B.finishes[i], text: finishText({ ...B, ...B.finishes[i] }),
+           key: `${lookKey(name) ? slug(lookKey(name)) : "fallback"}-${i}`,
            img: `mat-${slug(lookKey(name) || "x")}-${slug(B.finishes[i].n)}` };
 }
 // photos dropped into web/img/ as mat-<material>-<colour>.jpg replace the drawing
@@ -149,29 +150,51 @@ fetch("/api/images").then(r => r.json()).then(l => { IMAGES = new Set(l); }).cat
 // weave, brushing…), the colour a burn leaves, and for acrylic/glass whether
 // you can see through it.
 let CUSTOM = [];
+// your own stock sizes, per material: {material, name, w, h} in mm. They join the
+// Material size list as "Your sizes" while that material is chosen.
+let SIZES = [];
+const SIZE_MAX = 2000;
+const sizesOf = name => SIZES.filter(z => z.material === name)
+  .map(z => [z.name, Math.max(z.w, z.h), Math.min(z.w, z.h)]);
 function shade(hex6, k) {   // k > 0 lightens, k < 0 darkens
   const c = [1, 3, 5].map(i => parseInt(hex6.slice(i, i + 2), 16));
   return "#" + c.map(v => Math.round(k > 0 ? v + (255 - v) * k : v * (1 + k)))
     .map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("");
 }
+// The text colour that reads on a colour: whichever of light or dark ink has the
+// higher WCAG contrast against it (a grain/brushed texture is judged by the
+// average luminance of its shades). Every finish carries one as `text`.
+const INK_LIGHT = "#ffffff", INK_DARK = "#16181d";
+function relLum(h) {
+  return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255)
+    .map(c => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4))
+    .reduce((a, c, i) => a + c * [0.2126, 0.7152, 0.0722][i], 0);
+}
+function contrastText(colours) {
+  const L = colours.reduce((a, c) => a + relLum(c), 0) / colours.length;
+  const onLight = (L + 0.05) / (relLum(INK_DARK) + 0.05), onDark = (relLum(INK_LIGHT) + 0.05) / (L + 0.05);
+  return onDark >= onLight ? INK_LIGHT : INK_DARK;
+}
+const finishText = F => F.text || contrastText(F.gloss ? [F.gloss] : F.stops);
 function applyCustom() {
   Object.values(LOOKS).forEach(B => { B.finishes = B.finishes.filter(f => !f.custom); });
   CUSTOM.forEach(c => {
     const B = baseOf(c.material);
     if (B === FALLBACK || B.finishes.some(f => f.n === c.name)) return;
     B.finishes.push(B.frost
-      ? { n: c.name, custom: true, gloss: c.base, opaque: !c.see_through, mark: c.mark }
-      : { n: c.name, custom: true, mark: c.mark,
+      ? { n: c.name, custom: true, gloss: c.base, opaque: !c.see_through, mark: c.mark, text: c.text }
+      : { n: c.name, custom: true, mark: c.mark, text: c.text,
           stops: [shade(c.base, -0.14), shade(c.base, 0.07), shade(c.base, -0.05), shade(c.base, 0.12)] });
   });
   buildDefs();
 }
 let saveTimer = null;
 function saveCustom() {
+  CUSTOM.forEach(c => { c.text = contrastText([c.base]); });   // worked out, then saved with the colour
   applyCustom();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => fetch("/api/finishes", { method: "POST",
-    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ custom: CUSTOM }) }).catch(() => {}), 400);
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ custom: CUSTOM, sizes: SIZES }) }).catch(() => {}), 400);
   if (window.hsFinishesChanged) window.hsFinishesChanged();
 }
 
@@ -273,6 +296,7 @@ function swatch(name, opts) {
 // CSS "mm" is a nominal unit, not a physical one, so the thickness slabs are
 // only life-size once calibrated against a bank card held to the screen.
 const CARD_W = 85.6, CARD_H = 53.98, CARD_T = 0.76;
+const thk = mm => inches() ? `${+(mm / INCH).toFixed(3)} in` : `${mm} mm`;   // a thickness, in display units
 let mmScale = 1;
 try { mmScale = +localStorage.getItem("hs-mm-scale") || 1; } catch (e) {}
 const pxPerMm = () => 96 / 25.4 * mmScale;
@@ -386,8 +410,8 @@ function viewMachine(sel) {
     const art = `<div class="pk-photo"><img src="${img}" alt="" onerror="this.remove()">${MACHINE_ART}</div>`;
     const isCur = m && m.name === o.value;
     const body = `<div class="pk-name">${esc(o.text)}</div>` + (isCur ?
-      `<div class="pk-sub">Bed ${mmTxt(m.bed_w_mm)} × ${mmTxt(m.bed_h_mm)} mm · reaches ${mmTxt(m.usable_w_mm)} × ${mmTxt(m.usable_h_mm)} mm</div>
-       <div class="pk-chips">${chip("Laser " + esc(state.laserHost))}${chip(`${m.safety_mm} mm safety border`)}${chip("Origin top-left")}</div>` : "");
+      `<div class="pk-sub">Bed ${dims(m.bed_w_mm, m.bed_h_mm)} · reaches ${dims(m.usable_w_mm, m.usable_h_mm)}</div>
+       <div class="pk-chips">${chip("Laser " + esc(state.laserHost))}${chip(`${len(m.safety_mm)} ${unit()} safety border`)}${chip("Origin top-left")}</div>` : "");
     return card(o.value, sel, art, body, "pk-wide");
   }).join("");
   return head(sel, "", "", `To show a photo of your own machine here, save it as <code>web/img/${slug(sel.value || "machine")}.jpg</code>.`) +
@@ -411,7 +435,7 @@ function viewMaterial(sel) {
     const maxT = Math.max(0, ...cut.map(o => o.thickness_mm || 0));
     const fin = finishOf(m.name), fins = finishesOf(m.name);
     const chips = (eng.length ? chip("▦ Engrave", "eng") : "") +
-      (cut.length ? chip("✂ Cut" + (maxT ? ` ≤ ${maxT} mm` : ""), "cut") : "");
+      (cut.length ? chip("✂ Cut" + (maxT ? ` ≤ ${thk(maxT)}` : ""), "cut") : "");
     const dots = fins.length > 1 ? `<div class="pk-dots">${fins.map(f => `<button type="button" class="pk-dot ${f === fin ? "on" : ""}"
         data-f="${esc(f)}" title="${esc(f)}" aria-label="${esc(m.name)} — ${esc(f)}"
         style="background:${dotColour(m.name, f)}"></button>`).join("")}</div>` : "";
@@ -448,12 +472,13 @@ function viewThickness(sel) {
     const art = `<div class="pk-slab"><svg width="100%" height="${h}" viewBox="0 0 600 ${h}" preserveAspectRatio="xMinYMid slice">
         ${texture(name, 600, Math.max(h, 1))}<rect width="600" height="${h}" fill="none" stroke="#000" stroke-opacity=".35"/></svg></div>`;
     return `<button type="button" class="pk-card pk-row ${sel.value === o.value ? "on" : ""}" data-v="${o.value}">
-      <div class="pk-mm"><b>${T}</b> mm<small>${(T / 25.4).toFixed(3).replace(/0+$/, "")}″</small></div>
+      <div class="pk-mm">${inches() ? `<b>${+(T / INCH).toFixed(3)}</b> in<small>${T} mm</small>`
+                                     : `<b>${T}</b> mm<small>${+(T / INCH).toFixed(3)}″</small>`}</div>
       ${art}
       <div class="pk-cmp">≈ ${cards < 10 ? cards.toFixed(1) : Math.round(cards)} bank cards${cap ? "<br>" + cap : ""}</div>
     </button>`;
   }).join("");
-  const ref = `<div class="pk-ref"><span>Bank card edge · 0.76 mm</span>
+  const ref = `<div class="pk-ref"><span>Bank card edge · ${thk(CARD_T)}</span>
     <div class="pk-cardedge" style="height:${Math.max(1, CARD_T * px)}px"></div></div>`;
   return head(sel, m ? `${esc(m.name)} · ${esc(finishOf(m.name))}` : "",
       `<button type="button" class="pk-clear" data-cal>${mmScale === 1 ? "Calibrate" : "Recalibrate"}</button>`,
@@ -495,11 +520,11 @@ function viewSheet(sel) {
           <circle r="7" fill="var(--accent2)"/></svg></div>`;
       const pct = Math.round(s.w * s.h / (W * H) * 100);
       return card(s.id, sel, art, `<div class="pk-name">${esc(s.name)}${s.id.endsWith("|P") ? " · portrait" : ""}</div>
-        <div class="pk-sub">${mmTxt(s.w)} × ${mmTxt(s.h)} mm · ${pct}% of the bed</div>`);
+        <div class="pk-sub">${dims(s.w, s.h)} · ${pct}% of the bed</div>`);
     }).join("");
     return `<h2 class="pk-group">${esc(group)}</h2><div class="pk-grid">${cards}</div>`;
   }).join("");
-  return head(sel, `${mmTxt(W)} × ${mmTxt(H)} mm bed`, "",
+  return head(sel, `${dims(W, H)} bed`, "",
       "Each size is drawn to scale in the home corner of the bed, in the chosen material.") + groups;
 }
 
@@ -531,7 +556,7 @@ function viewPreset(sel) {
       ${bar("Speed", op.speed)}${bar("Power", op.power)}
       <div class="pk-bar pk-burn"><span>${isCut ? "Kerf" : "Burn"}</span><i><b style="width:${Math.round(8 + 92 * t)}%"></b></i><em>${word}</em></div>
       <div class="pk-chips">${chip(isCut ? `${op.freq} Hz` : `${op.dpi} DPI`, isCut ? "cut" : "eng")}${
-        isCut && op.thickness_mm ? chip(`up to ${op.thickness_mm} mm`) : ""}</div>`);
+        isCut && op.thickness_mm ? chip(`up to ${thk(op.thickness_mm)}`) : ""}</div>`);
   }).join("");
   const hidden = m.operations.length - opts(sel).length;
   return head(sel, `${esc(m.name)} · ${esc(finishOf(m.name))}${hidden ? ` · ${hidden} hidden` : ""}`, "",
@@ -551,7 +576,7 @@ function renderSettings() {
   const mats = state.materials;
   if (!stMat || !mats.some(m => m.name === stMat)) stMat = $("#material").value || (mats[0] && mats[0].name);
   const nav = mats.map(m => {
-    const n = CUSTOM.filter(c => c.material === m.name).length;
+    const n = CUSTOM.filter(c => c.material === m.name).length + SIZES.filter(z => z.material === m.name).length;
     return `<button type="button" class="st-mat ${m.name === stMat ? "on" : ""}" data-m="${esc(m.name)}">
       <svg viewBox="0 0 40 30" preserveAspectRatio="xMidYMid slice">${texture(m.name, 40, 30, finishesOf(m.name)[0])}</svg>
       <span>${esc(m.name)}</span>${n ? `<em>${n}</em>` : ""}</button>`;
@@ -564,11 +589,25 @@ function renderSettings() {
       <label>Name<input type="text" data-k="name" maxlength="40" value="${esc(c.name)}"></label>
       <label>Colour<input type="color" data-k="base" value="${c.base}"></label>
       <label>Burns as<input type="color" data-k="mark" value="${c.mark}"></label>
+      <label title="Worked out from the colour, for text drawn on it">Text<span class="st-text"
+        style="background:${c.base};color:${c.text || contrastText([c.base])}">Aa</span></label>
       ${B.frost ? `<label class="st-check"><input type="checkbox" data-k="see_through" ${c.see_through ? "checked" : ""}>See-through</label>` : ""}
       <button type="button" class="st-del" data-del title="Remove this colour">✕</button>
       <p class="st-err" hidden></p></div>`).join("");
+  const bed = state.machine, tooBig = z => bed && Math.max(z.w, z.h) > bed.bed_w_mm + 0.5 ||
+    bed && Math.min(z.w, z.h) > bed.bed_h_mm + 0.5;
+  const sizeRows = SIZES.map((z, i) => [z, i]).filter(([z]) => z.material === stMat).map(([z, i]) => `
+    <div class="st-row st-srow" data-i="${i}">
+      <div class="st-sizeprev">${sizePreview(z)}</div>
+      <label>Name<input type="text" data-k="name" maxlength="40" value="${esc(z.name)}"></label>
+      <label>Width (${unit()})<input type="number" data-k="w" step="${inches() ? 0.01 : 0.1}" value="${len(z.w)}"></label>
+      <label>Height (${unit()})<input type="number" data-k="h" step="${inches() ? 0.01 : 0.1}" value="${len(z.h)}"></label>
+      <button type="button" class="st-del" data-del title="Remove this size">✕</button>
+      <p class="st-err" ${tooBig(z) ? "" : "hidden"}>${tooBig(z) ? "Bigger than the bed — it won't be offered." : ""}</p></div>`).join("");
   panel.innerHTML = `<div class="pk-wrap">
-    ${headRow("Settings", "Material colours", "",
+    ${headRow("Settings", "Material colours and sizes",
+      `<div class="seg" role="group" aria-label="Units">${["mm", "in"].map(u =>
+        `<button type="button" data-unit="${u}" class="${unit() === u ? "on" : ""}">${u}</button>`).join("")}</div>`,
       "Built-in colours (🔒) can't be changed; add your own beside them — the colour of the stock you buy and the colour a burn " +
       "leaves on it. The pattern (grain, weave, brushing) comes from the material. Saved to <code>finishes.json</code> beside the server.")}
     <div class="st-grid"><nav class="st-nav">${nav}</nav><section class="st-main">
@@ -576,9 +615,18 @@ function renderSettings() {
       <h2 class="pk-group">${esc(stMat)} · your colours</h2>
       <div class="st-rows">${rows || `<p class="pk-sub">None yet.</p>`}</div>
       <button type="button" class="st-add" data-add>+ Add a colour</button>
+      <h2 class="pk-group">${esc(stMat)} · your sizes</h2>
+      <div class="st-rows">${sizeRows || `<p class="pk-sub">None yet.</p>`}</div>
+      <button type="button" class="st-add" data-add-size>+ Add a size</button>
     </section></div></div>`;
   panel.querySelectorAll("[data-close]").forEach(b => b.onclick = close);
   panel.querySelectorAll(".st-mat").forEach(b => b.onclick = () => { stMat = b.dataset.m; renderSettings(); });
+  // units: display only — lengths everywhere switch, nothing stored changes
+  panel.querySelectorAll("[data-unit]").forEach(b => b.onclick = () => {
+    state.units = b.dataset.unit;
+    savePrefs({ units: state.units });
+    applyUnits(); renderSettings();
+  });
   panel.querySelector("[data-add]").onclick = () => {
     const taken = new Set(finishesOf(stMat));
     let n = 1; while (taken.has(`My colour ${n}`)) n++;
@@ -589,7 +637,7 @@ function renderSettings() {
     const last = panel.querySelector(".st-row:last-child input[data-k=name]");
     if (last) { last.focus(); last.select(); }
   };
-  panel.querySelectorAll(".st-row").forEach(row => {
+  panel.querySelectorAll(".st-row:not(.st-srow)").forEach(row => {
     const c = CUSTOM[+row.dataset.i], err = row.querySelector(".st-err");
     row.querySelector("[data-del]").onclick = () => { CUSTOM.splice(+row.dataset.i, 1); saveCustom(); renderSettings(); };
     row.querySelectorAll("input").forEach(inp => inp.oninput = () => {
@@ -604,8 +652,60 @@ function renderSettings() {
       } else c[k] = v;
       saveCustom();
       row.querySelector(".st-prev").innerHTML = materialSwatch(stMat, c.name);
+      const tx = row.querySelector(".st-text");
+      tx.style.background = c.base; tx.style.color = c.text;
     });
   });
+  // ---- your sizes ----
+  const builtinNames = () => new Set(SHEETS.flatMap(([, l]) => l.map(([n]) => n)));
+  panel.querySelector("[data-add-size]").onclick = () => {
+    const taken = new Set([...builtinNames(), ...sizesOf(stMat).map(([n]) => n)]);
+    let n = 1; while (taken.has(`My size ${n}`)) n++;
+    SIZES.push({ material: stMat, name: `My size ${n}`, w: 300, h: 200 });
+    saveCustom(); renderSettings();
+    const last = [...panel.querySelectorAll(".st-srow input[data-k=name]")].pop();
+    if (last) { last.focus(); last.select(); }
+  };
+  panel.querySelectorAll(".st-srow").forEach(row => {
+    const z = SIZES[+row.dataset.i], err = row.querySelector(".st-err");
+    row.querySelector("[data-del]").onclick = () => { SIZES.splice(+row.dataset.i, 1); saveCustom(); renderSettings(); };
+    row.querySelectorAll("input").forEach(inp => inp.oninput = () => {
+      const k = inp.dataset.k;
+      let problem = "";
+      if (k === "name") {
+        const name = inp.value.trim();
+        problem = !name ? "Give it a name." : name.includes("|") ? "A name can't contain “|”."
+          : builtinNames().has(name) ? `“${name}” is a built-in size — pick another name.`
+          : SIZES.some(o => o !== z && o.material === stMat && o.name === name) ? `${stMat} already has a size called “${name}”.` : "";
+        if (!problem) {
+          // renaming the size in use keeps it selected (its id is "<name>|L/P")
+          const [was, o] = (state.sheetWant || "").split("|");
+          if (was === z.name && z.material === $("#material").value) {
+            state.sheetWant = `${name}|${o}`;
+            savePrefs({ sheet: state.sheetWant });
+          }
+          z.name = name;
+        }
+      } else {
+        const v = fromLen(parseFloat(inp.value));
+        problem = !(v >= 1 && v <= SIZE_MAX) ? `Width and height are ${len(1)}–${len(SIZE_MAX)} ${unit()}.` : "";
+        if (!problem) z[k] = Math.round(v * 10) / 10;
+      }
+      if (!problem && bed && (Math.max(z.w, z.h) > bed.bed_w_mm + 0.5 || Math.min(z.w, z.h) > bed.bed_h_mm + 0.5))
+        problem = "Bigger than the bed — it won't be offered.";
+      err.hidden = !problem; err.textContent = problem;
+      row.querySelector(".st-sizeprev").innerHTML = sizePreview(z);
+      saveCustom();
+    });
+  });
+}
+// a size drawn to scale in the bed's outline, in the material
+function sizePreview(z) {
+  const W = state.machine.bed_w_mm, H = state.machine.bed_h_mm;
+  const w = Math.min(z.w, W), h = Math.min(z.h, H);
+  return `<svg viewBox="-8 -8 ${W + 16} ${H + 16}"><rect width="${W}" height="${H}" rx="6" fill="var(--bed)" stroke="var(--bedline)" stroke-width="3"/>
+    <svg width="${w}" height="${h}" viewBox="0 0 ${w / 3} ${h / 3}" preserveAspectRatio="none">${texture(stMat, w / 3, h / 3, finishOf(stMat))}</svg>
+    <rect width="${w}" height="${h}" fill="none" stroke="var(--accent2)" stroke-width="3"/></svg>`;
 }
 
 // ---------- wiring ----------
@@ -647,7 +747,9 @@ function init() {
 init();
 fetch("/api/finishes").then(r => r.json()).then(d => {
   CUSTOM = Array.isArray(d.custom) ? d.custom : [];
-  applyCustom();
+  SIZES = Array.isArray(d.sizes) ? d.sizes : [];
+  // colours saved before text colours existed get theirs worked out and saved once
+  if (CUSTOM.some(c => !c.text)) saveCustom(); else applyCustom();
 }).catch(() => {}).finally(() => {
   window.HSLook.ready = true;
   if (window.hsFinishesChanged) window.hsFinishesChanged();
@@ -656,9 +758,7 @@ fetch("/api/finishes").then(r => r.json()).then(d => {
 // what the bed's burn simulation needs to know about a material in a colour
 function burnLook(name, finish) {
   const L = lookOf(name, finish);
-  const base = L.gloss || L.stops[1] || L.stops[0];
-  const lum = hex(base).reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0);
-  return { mark: L.mark, frost: !!L.frost, see: !!L.gloss && !L.opaque, dark: lum < 0.35,
+  return { mark: L.mark, frost: !!L.frost, see: !!L.gloss && !L.opaque, text: L.text, dark: L.text === INK_LIGHT,
            organic: !L.frost && !/anodized|stainless|alumamark|brass/.test(lookKey(name) || "") };
 }
 // how hard a preset burns on this material, 0..1 (the same scale the preset cards use)
@@ -666,5 +766,5 @@ function burnOf(name, op) {
   const m = state.materials.find(x => x.name === name);
   return m ? burnScale(m.operations.filter(o => o.type === op.type))(op) : 0.5;
 }
-window.HSLook = { finishesOf, texture, look: burnLook, burn: burnOf, swatch: dotColour, openSettings };
+window.HSLook = { finishesOf, sizesOf, texture, look: burnLook, burn: burnOf, swatch: dotColour, ink: c => contrastText([c]), openSettings };
 })();
