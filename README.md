@@ -186,7 +186,14 @@ as environment variables.
    safety boundary or overlaps another — and **Send** is disabled while it is
    red (hover **Send** to see what's holding it back). A pulsing **⚠** in the
    Artwork card's title collects the warnings; hover it to read them.
-   **Delete** takes the selected page off the bed. The Artwork card also says
+   **Delete** takes the selected page off the bed.
+   **Page layout** (a chip on the Artwork card) places a page by the whole
+   page instead of its ink, so artwork keeps the spot it was designed in: set
+   the artboard to the stock's size (Illustrator: select a stock-sized frame,
+   *Object → Artboards → Fit to Selected Art*, then delete the frame). A page
+   the size of the chosen stock switches it on by itself and lands on the
+   stock. Only placement changes — safety and overlap checks, and what is
+   sent, still go by the ink. The Artwork card also says
    whether a page is **Vector** and, for pictures in it, their resolution as
    placed (amber below 150 dpi). Rulers run along all four sides: top/left
    from the home corner, bottom/right from the opposite one. Pick a **material

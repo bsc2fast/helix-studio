@@ -631,8 +631,14 @@ async function includePage(docId, n, another) {
   const it = { uid: ++lastUid, doc: docId, page: n, pd, off: { x: 0, y: 0 }, rot: 0 };
   it.els = buildItemEls(it);
   state.items.push(it);
-  // the first page centres on the stock; later ones take the first free spot
-  if (state.items.length === 1 || !placeFree(it)) centerIn(it);
+  // a page made for the chosen stock (same size, either way round) keeps its
+  // layout and lands on the stock; otherwise the first page centres on the
+  // stock and later ones take the first free spot
+  const fit = pd.content_mm ? fitsSheet(pd) : null;
+  if (fit !== null && !copiesOf(docId, n).some(o => o !== it)) {
+    const S = sheetBox();
+    Object.assign(it, { whole: true, rot: fit, off: { x: S.x, y: S.y } });
+  } else if (state.items.length === 1 || !placeFree(it)) centerIn(it);
   select(it);
 }
 
@@ -704,10 +710,55 @@ function buildItemEls(it) {
 
 // ---------- placement helpers ----------
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+// ---------- keep page layout ----------
+// A page is normally placed by its ink (everything drawn, cropped tight). With
+// "Page layout" on it is placed by the whole page instead — design on an
+// artboard the size of the stock and the artwork keeps its spot on it. Only
+// the placement frame changes: what burns is still the ink, every safety and
+// overlap check still uses the ink, and Send still ships the ink-cropped page
+// at the ink's position on the bed — exactly what an ink-placed page sends.
+function frameOf(it) {
+  const pd = it.pd;
+  return it.whole ? { x0_mm: 0, y0_mm: 0, w_mm: pd.width_mm, h_mm: pd.height_mm } : pd.content_mm;
+}
 function artDims(it) {
-  const c = it && it.pd.content_mm;
+  const c = it && it.pd.content_mm && frameOf(it);
   if (!c) return { w: 0, h: 0 };
   return (it.rot % 180 === 0) ? { w: c.w_mm, h: c.h_mm } : { w: c.h_mm, h: c.w_mm };
+}
+// where the ink lands on the bed for a placement (rotation turns the frame
+// about its top-left, the same way artTransform draws it)
+function inkRect(it, rot = it.rot, off = it.off) {
+  const c = it.pd.content_mm;
+  if (!c) return { x: off.x, y: off.y, w: 0, h: 0 };
+  let ix = 0, iy = 0;
+  if (it.whole) {
+    const W = it.pd.width_mm, H = it.pd.height_mm;
+    [ix, iy] = rot === 90 ? [H - (c.y0_mm + c.h_mm), c.x0_mm]
+             : rot === 180 ? [W - (c.x0_mm + c.w_mm), H - (c.y0_mm + c.h_mm)]
+             : rot === 270 ? [c.y0_mm, W - (c.x0_mm + c.w_mm)]
+             : [c.x0_mm, c.y0_mm];
+  }
+  const turned = rot % 180 !== 0;
+  return { x: off.x + ix, y: off.y + iy, w: turned ? c.h_mm : c.w_mm, h: turned ? c.w_mm : c.h_mm };
+}
+// the stock this page was designed for: its size (either way round) matches
+// the chosen stock to within a millimetre — returns the rotation that fits
+function fitsSheet(pd) {
+  const S = sheetBox(), W = pd.width_mm, H = pd.height_mm, near = (a, b) => Math.abs(a - b) <= 1;
+  if (!S) return null;
+  return near(W, S.w) && near(H, S.h) ? 0 : near(H, S.w) && near(W, S.h) ? 90 : null;
+}
+// turn page layout on or off. On a page made for the stock it lands on the
+// stock; otherwise the ink stays exactly where it is on the bed
+function setWhole(it, on) {
+  if (!it.pd.content_mm || !!it.whole === on) return;
+  const before = inkRect(it);
+  it.whole = on;
+  const r = on ? fitsSheet(it.pd) : null;
+  if (r !== null) { const S = sheetBox(); it.rot = r; it.off = { x: S.x, y: S.y }; }
+  else { const after = inkRect(it); it.off.x += before.x - after.x; it.off.y += before.y - after.y; }
+  updatePlacement();
 }
 function bounds() {
   const m = state.machine, s = m.safety_mm != null ? m.safety_mm : (m.margin_mm || 3);
@@ -724,16 +775,18 @@ function areas() {
   out.push(B);
   return out;
 }
-const rectOf = it => { const d = artDims(it); return { x: it.off.x, y: it.off.y, w: d.w, h: d.h }; };
+const rectOf = it => inkRect(it);   // what burns: overlap is about the ink
 function hit(a, b) {   // overlapping area (touching edges don't count), or null
   const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y);
   const x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h);
   return (x1 - x0 > 0.01 && y1 - y0 > 0.01) ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
 }
+// keep the ink inside the safety boundary (the page frame around it may run
+// past — it doesn't burn)
 function clampOff(it) {
-  const d = artDims(it), B = bounds();
-  it.off.x = Math.max(B.minX, Math.min(it.off.x, B.maxX - d.w));
-  it.off.y = Math.max(B.minY, Math.min(it.off.y, B.maxY - d.h));
+  const r = inkRect(it), B = bounds(), dx = r.x - it.off.x, dy = r.y - it.off.y;
+  it.off.x = Math.max(B.minX - dx, Math.min(it.off.x, B.maxX - dx - r.w));
+  it.off.y = Math.max(B.minY - dy, Math.min(it.off.y, B.maxY - dy - r.h));
 }
 function centerIn(it) {
   const d = artDims(it);
@@ -851,15 +904,16 @@ function updatePlacement() {
   state.items.forEach(it => {
     const c = it.pd.content_mm;
     clampOff(it);
-    const d = artDims(it), ox = it.off.x, oy = it.off.y, E = it.els;
-    it.inBounds = !!c && ox >= B.minX - 0.01 && oy >= B.minY - 0.01 &&
-                  ox + d.w <= B.maxX + 0.01 && oy + d.h <= B.maxY + 0.01;
+    const d = artDims(it), ox = it.off.x, oy = it.off.y, E = it.els, ink = inkRect(it);
+    it.inBounds = !!c && ink.x >= B.minX - 0.01 && ink.y >= B.minY - 0.01 &&
+                  ink.x + ink.w <= B.maxX + 0.01 && ink.y + ink.h <= B.maxY + 0.01;
     for (const el of [E.art, E.clipR, E.engwash]) {
       el.setAttribute("x", ox); el.setAttribute("y", oy);
       el.setAttribute("width", Math.max(d.w, 0.1)); el.setAttribute("height", Math.max(d.h, 0.1));
     }
     if (c) {
-      const tf = artTransform(it.rot, ox, oy, c.x0_mm, c.y0_mm, c.w_mm, c.h_mm);
+      const f = frameOf(it);
+      const tf = artTransform(it.rot, ox, oy, f.x0_mm, f.y0_mm, f.w_mm, f.h_mm);
       E.img.setAttribute("transform", tf);
       E.cutlines.setAttribute("transform", tf);
     }
@@ -868,8 +922,8 @@ function updatePlacement() {
     if (multi) E.tag.removeAttribute("hidden"); else E.tag.setAttribute("hidden", "hidden");
     if (!c) problems.push(`⚠ No printable artwork detected on ${pageName(it)}.`);
     else if (!it.inBounds) problems.push(`⚠ ${multi ? cap(pageName(it)) + " is i" : "I"}nside the ${len(B.s)} ${unit()} safety margin. Move it within the dashed boundary.`);
-    if (S && c && (ox < S.x - 0.01 || oy < S.y - 0.01 ||
-                   ox + d.w > S.x + S.w + 0.01 || oy + d.h > S.y + S.h + 0.01))
+    if (S && c && (ink.x < S.x - 0.01 || ink.y < S.y - 0.01 ||   // the ink, not the page frame
+                   ink.x + ink.w > S.x + S.w + 0.01 || ink.y + ink.h > S.y + S.h + 0.01))
       notes.push(`${multi ? cap(pageName(it)) : "The artwork"} runs past the ${S.name} sheet.`);
   });
 
@@ -909,7 +963,7 @@ function updatePlacement() {
     setLen($("#offx"), it.off.x);
     setLen($("#offy"), it.off.y);
     $("#rotLbl").textContent = it.rot + "°";
-    $("#artChips").innerHTML = artChips(it.pd);
+    $("#artChips").innerHTML = artChips(it);
     const turn = artTurn(it);
     $("#rotateBtn").disabled = !turn.ok;
     $("#rotateBtn").title = turn.ok ? `Rotate to ${(it.rot + 90) % 360}°` : turn.why;
@@ -951,11 +1005,16 @@ function updatePlacement() {
 
 // what the page is made of: vector paths, and/or pictures at their resolution as
 // placed. Below 150 dpi a picture will burn visibly blocky, so it's flagged.
-function artChips(pd) {
-  const imgs = pd.images, vec = (pd.vectors || []).length > 0;
-  if (!imgs) return "";   // pdfimages unavailable: say nothing rather than guess
+function artChips(it) {
+  const pd = it.pd, imgs = pd.images, vec = (pd.vectors || []).length > 0;
   const chip = (t, cls, tip) => `<span class="pk-chip ${cls}" title="${tip}">${t}</span>`;
-  let out = vec || !imgs.length ? chip("Vector", "eng", "Paths and text: sharp at any size") : "";
+  // the page-layout switch: place by the whole page instead of the ink
+  let out = pd.content_mm ? `<button type="button" class="pk-chip pagechip ${it.whole ? "on" : ""}" data-whole
+    aria-pressed="${!!it.whole}" title="${it.whole
+      ? `Placed by the whole ${dims(pd.width_mm, pd.height_mm)} page — the artwork keeps its spot on it. Click to place by the ink instead.`
+      : `Place by the whole ${dims(pd.width_mm, pd.height_mm)} page, keeping the artwork where it was designed on it`}">Page layout</button>` : "";
+  if (!imgs) return out;   // pdfimages unavailable: say nothing rather than guess
+  out += vec || !imgs.length ? chip("Vector", "eng", "Paths and text: sharp at any size") : "";
   if (imgs.length) {
     const ppi = Math.min(...imgs.map(i => i.ppi)), low = ppi < 150;
     out += chip(`${ppi} dpi`, low ? "warn" : "",
@@ -970,13 +1029,16 @@ $("#offy").oninput = e => { if (state.active) { state.active.off.y = fromLen(+e.
 // corner swaps its width and height, and is only offered when the turned
 // artwork still sits inside the safety boundary from where it is now
 function artTurn(it) {
-  const d = artDims(it), B = bounds();
+  const B = bounds();
   if (!it.pd.content_mm) return { ok: false, why: "there is no artwork on this page" };
-  if (d.h > B.maxX - B.minX + 0.01 || d.w > B.maxY - B.minY + 0.01)
-    return { ok: false, why: `turned, the ${dims(d.h, d.w)} artwork is bigger than the safe area` };
+  const r = inkRect(it, (it.rot + 90) % 360);   // where the ink would be, turned
+  if (r.w > B.maxX - B.minX + 0.01 || r.h > B.maxY - B.minY + 0.01)
+    return { ok: false, why: `turned, the ${dims(r.w, r.h)} artwork is bigger than the safe area` };
   const need = [];
-  if (it.off.x + d.h > B.maxX + 0.01) need.push(`X ≤ ${len(Math.floor(B.maxX - d.h))} ${unit()}`);
-  if (it.off.y + d.w > B.maxY + 0.01) need.push(`Y ≤ ${len(Math.floor(B.maxY - d.w))} ${unit()}`);
+  if (r.x < B.minX - 0.01) need.push(`X ≥ ${len(Math.ceil(it.off.x + B.minX - r.x))} ${unit()}`);
+  if (r.y < B.minY - 0.01) need.push(`Y ≥ ${len(Math.ceil(it.off.y + B.minY - r.y))} ${unit()}`);
+  if (r.x + r.w > B.maxX + 0.01) need.push(`X ≤ ${len(Math.floor(it.off.x - (r.x + r.w - B.maxX)))} ${unit()}`);
+  if (r.y + r.h > B.maxY + 0.01) need.push(`Y ≤ ${len(Math.floor(it.off.y - (r.y + r.h - B.maxY)))} ${unit()}`);
   if (need.length)
     return { ok: false, why: `turned, it would cross the safety boundary at (${len(it.off.x)}, ${len(it.off.y)}). Move it to ${need.join(" and ")} first.` };
   return { ok: true };
@@ -988,6 +1050,7 @@ $("#rotateBtn").onclick = () => {
 };
 $("#centerBtn").onclick = () => state.active && centerIn(state.active);
 $("#artCorner").onclick = () => cornerPick("art");
+$("#artChips").onclick = e => { if (e.target.closest("[data-whole]") && state.active) setWhole(state.active, !state.active.whole); };
 
 // ---------- move to a corner: pick it on the bed ----------
 // "Corner" shows a pulsing "Here" at each corner of the bed; hovering one
@@ -1260,7 +1323,7 @@ $("#sendBtn").onclick = async () => {
   const btn = $("#sendBtn"); btn.disabled = true; state.sending = true; $("#sendLbl").textContent = "Sending…";
   const out = $("#out"); out.classList.add("on"); out.textContent = "working…";
   const items = state.items.map(it => ({ doc: it.doc, page: it.page,
-                                         offset_mm: [it.off.x, it.off.y], rotation: it.rot }));
+                                         offset_mm: [inkRect(it).x, inkRect(it).y], rotation: it.rot }));
   const files = new Set(items.map(i => i.doc)).size;
   try {
     const data = await (await fetch("/api/send", {
