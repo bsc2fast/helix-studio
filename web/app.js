@@ -343,8 +343,10 @@ function sheetBox() {
   const s = currentSheet();
   if (!s) return null;
   const m = state.machine, o = state.sheetOff;
-  o.x = Math.round(Math.max(0, Math.min(o.x, m.bed_w_mm - s.w)));
-  o.y = Math.round(Math.max(0, Math.min(o.y, m.bed_h_mm - s.h)));
+  // whole mm, and never past the far edge: round, then cap at the last whole
+  // mm that still fits (a 609.6 bed takes a 125 sheet at x ≤ 484, not 485)
+  o.x = Math.max(0, Math.min(Math.round(o.x), Math.floor(m.bed_w_mm - s.w)));
+  o.y = Math.max(0, Math.min(Math.round(o.y), Math.floor(m.bed_h_mm - s.h)));
   return { ...s, x: o.x, y: o.y };
 }
 function saveSheet() {
@@ -414,7 +416,13 @@ $("#sheetRotate").onclick = () => {
   const s = sheetBox(), rot = s && sheetTurn(s);
   if (rot && rot.ok) { $("#sheet").value = rot.alt.id; moveSheet(); }
 };
-$("#sheetHome").onclick = () => { state.sheetOff = { x: 0, y: 0 }; moveSheet(); };
+$("#sheetCorner").onclick = () => cornerPick("sheet");
+$("#sheetCenter").onclick = () => {
+  const s = sheetBox(), m = state.machine;
+  if (!s) return;
+  state.sheetOff = { x: (m.bed_w_mm - s.w) / 2, y: (m.bed_h_mm - s.h) / 2 };
+  moveSheet();
+};
 
 // the floating panel: Material while a sheet is chosen, Placement once a PDF is in
 function syncPanel() {
@@ -774,7 +782,6 @@ function buildBed() {
   const rulers = mk("g", {});
   bed.appendChild(rulers);
   drawRulers(rulers, m);
-  bed.appendChild(mk("circle", { cx: 0, cy: 0, r: 6, fill: "var(--accent2)" }));
 
   const items = mk("g", {});
   const overlaps = mk("g", { "pointer-events": "none" });   // red wash where pages collide
@@ -896,7 +903,7 @@ function updatePlacement() {
   const who = $("#placeWhich");
   who.textContent = it && multi ? "· " + pageTag(it) : "";
   who.title = it && manyDocs() ? `page ${it.page} of ${docFor(it.doc).name}` : "";
-  ["#offx", "#offy", "#rotateBtn", "#centerBtn"].forEach(s => { $(s).disabled = !it; });
+  ["#offx", "#offy", "#rotateBtn", "#centerBtn", "#artCorner"].forEach(s => { $(s).disabled = !it; });
   if (it) {
     const d = artDims(it);
     setLen($("#offx"), it.off.x);
@@ -980,6 +987,83 @@ $("#rotateBtn").onclick = () => {
   it.rot = (it.rot + 90) % 360; updatePlacement();
 };
 $("#centerBtn").onclick = () => state.active && centerIn(state.active);
+$("#artCorner").onclick = () => cornerPick("art");
+
+// ---------- move to a corner: pick it on the bed ----------
+// "Corner" shows a pulsing "Here" at each corner of the bed; hovering one
+// previews where the piece lands, clicking snaps the piece's matching corner
+// there. The stock goes to the bed's own corners; artwork to the corners of
+// the safe area (the dashed boundary) — the bed's corner itself would be out
+// of bounds. Esc, a click elsewhere or the button again cancels.
+let picking = null, pickGhost = null;   // which card is picking, and its landing preview
+const CORNERS = [["tl", "↖"], ["tr", "↗"], ["bl", "↙"], ["br", "↘"]];
+function cornerTargets(kind) {
+  const m = state.machine;
+  if (kind === "sheet") {
+    const s = sheetBox();
+    if (!s) return null;
+    return { w: s.w, h: s.h, box: { minX: 0, minY: 0, maxX: m.bed_w_mm, maxY: m.bed_h_mm } };
+  }
+  const it = state.active;
+  if (!it || !it.pd.content_mm) return null;
+  const d = artDims(it), B = bounds();
+  if (d.w > B.maxX - B.minX + 0.01 || d.h > B.maxY - B.minY + 0.01) return null;
+  return { w: d.w, h: d.h, box: B };
+}
+function cornerSpot(t, c) {   // top-left offset of the piece snapped into corner c
+  return { x: c[1] === "l" ? t.box.minX : t.box.maxX - t.w,
+           y: c[0] === "t" ? t.box.minY : t.box.maxY - t.h };
+}
+function cornerPick(kind) {
+  if (picking) { const was = picking; endCornerPick(); if (was === kind) return; }
+  const t = cornerTargets(kind);
+  if (!t) return;
+  picking = kind;
+  $(kind === "sheet" ? "#sheetCorner" : "#artCorner").classList.add("on");
+  // measure against the bed area (the marker layer itself is still hidden, so has no box yet)
+  const wrap = $("#cornerPick"), bed = $("#bed"), wr = wrap.parentElement.getBoundingClientRect(), br = bed.getBoundingClientRect();
+  const k = br.width / state.vb.w;   // px per mm
+  const px = (x, y) => ({ left: br.left - wr.left + (x + GUT) * k, top: br.top - wr.top + (y + GUT) * k });
+  const ghost = mk("rect", { class: "cornerghost", rx: 2, width: t.w, height: t.h, hidden: "hidden" });
+  bedEls.items.appendChild(ghost);
+  wrap.innerHTML = "";
+  CORNERS.forEach(([c, arrow]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "here " + c;
+    b.innerHTML = c[1] === "l" ? `<span>${arrow}</span> Here` : `Here <span>${arrow}</span>`;
+    b.title = `Snap the ${kind === "sheet" ? "sheet" : "artwork"} to this corner`;
+    // anchor each marker inside its corner of the bed (or safe area)
+    const p = px(c[1] === "l" ? t.box.minX : t.box.maxX, c[0] === "t" ? t.box.minY : t.box.maxY);
+    b.style.left = p.left + "px"; b.style.top = p.top + "px";
+    b.style.translate = `${c[1] === "l" ? "8px" : "calc(-100% - 8px)"} ${c[0] === "t" ? "8px" : "calc(-100% - 8px)"}`;
+    const spot = cornerSpot(t, c);
+    b.onmouseenter = b.onfocus = () => { ghost.setAttribute("x", spot.x); ghost.setAttribute("y", spot.y); ghost.removeAttribute("hidden"); };
+    b.onmouseleave = b.onblur = () => ghost.setAttribute("hidden", "hidden");
+    b.onclick = e => {
+      e.stopPropagation();
+      if (kind === "sheet") { state.sheetOff = spot; endCornerPick(); moveSheet(); }
+      else { const it = state.active; it.off = { ...spot }; endCornerPick(); updatePlacement(); }
+    };
+    wrap.appendChild(b);
+  });
+  wrap.hidden = false;
+  pickGhost = ghost;
+  wrap.querySelector(".here").focus({ preventScroll: true });
+}
+function endCornerPick() {
+  if (!picking) return;
+  picking = null;
+  $("#cornerPick").hidden = true;
+  $("#cornerPick").innerHTML = "";
+  if (pickGhost) { pickGhost.remove(); pickGhost = null; }
+  ["#sheetCorner", "#artCorner"].forEach(s => $(s).classList.remove("on"));
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape" && picking) endCornerPick(); });
+document.addEventListener("pointerdown", e => {
+  if (picking && !e.target.closest(".here, #sheetCorner, #artCorner")) endCornerPick();
+}, true);
+window.addEventListener("resize", endCornerPick);
 
 // ---------- material + preset dropdown ----------
 function currentMaterial() { return state.materials.find(m => m.name === $("#material").value) || null; }

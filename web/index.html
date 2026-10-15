@@ -105,6 +105,25 @@
   main{flex:1;position:relative;display:flex;min-height:0}
   .bedwrap{flex:1;position:relative;display:flex;align-items:center;justify-content:center;
     padding:12px var(--gutter);min-width:0}
+  /* side-by-side Corner / Center */
+  .btnrow{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  #placeSection .btnrow button,#sheetSection .btnrow button{padding:8px 6px}
+  #sheetCorner.on,#artCorner.on{border-color:var(--accent2);box-shadow:0 0 0 2px var(--accent2) inset;color:var(--accent2)}
+  /* "Here" markers at the bed's corners while picking one */
+  .cornerpick{position:absolute;inset:0;pointer-events:none;z-index:5}
+  .here{position:absolute;pointer-events:auto;display:inline-flex;align-items:center;gap:5px;
+    padding:6px 12px 6px 9px;border-radius:999px;border:0;background:var(--accent2);color:#fff;
+    font:600 12.5px/1 system-ui,-apple-system,sans-serif;cursor:pointer;white-space:nowrap;
+    box-shadow:0 2px 10px rgba(0,0,0,.35);animation:herePulse 1.4s ease-in-out infinite}
+  .here:hover{animation-play-state:paused;filter:brightness(1.1)}
+  .here svg{width:14px;height:14px}
+  .here.tl{transform-origin:0 0}.here.tr{transform-origin:100% 0}.here.bl{transform-origin:0 100%}.here.br{transform-origin:100% 100%}
+  @keyframes herePulse{
+    0%,100%{box-shadow:0 2px 10px rgba(0,0,0,.35),0 0 0 0 color-mix(in srgb, var(--accent2) 60%, transparent);scale:1}
+    50%{box-shadow:0 2px 10px rgba(0,0,0,.35),0 0 0 9px color-mix(in srgb, var(--accent2) 0%, transparent);scale:1.08}}
+  @media (prefers-reduced-motion:reduce){ .here{animation:none} }
+  #bed .cornerghost{fill:color-mix(in srgb, var(--accent2) 14%, transparent);stroke:var(--accent2);
+    stroke-width:1.5px;vector-effect:non-scaling-stroke;stroke-dasharray:6 4;pointer-events:none}
   #bed{background:var(--bed);border:1px solid var(--line);border-radius:12px;
     box-shadow:var(--shadow);touch-action:none;user-select:none;display:block}
   #bed .art{cursor:grab;stroke-opacity:0;transition:stroke-opacity .15s}
@@ -438,6 +457,7 @@
   </div>
   <div class="bedwrap">
     <svg id="bed" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="cornerpick" id="cornerPick" hidden></div>
     <!-- shown while a file is dragged over the window with pages already on the bed -->
     <div class="addhint" id="addHint" hidden><div class="box">Drop to add another PDF</div></div>
   </div>
@@ -451,7 +471,10 @@
         <div class="fld"><label>Y (<span class="unitlbl">mm</span>)</label><input type="number" id="sheety" value="0" step="1" min="0"></div>
       </div>
       <button id="sheetRotate"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg> <span>Rotate · <span id="sheetOrient">landscape</span></span></button>
-      <button id="sheetHome" title="Push the sheet back into the home corner">Move to corner</button>
+      <div class="btnrow">
+        <button id="sheetCorner" title="Snap the sheet to a corner of the bed"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10V4h6"/><path d="M4 4l7 7"/><rect x="12" y="12" width="8" height="8" rx="1.5"/></svg> <span>Corner</span></button>
+        <button id="sheetCenter" title="Centre the sheet on the bed"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg> <span>Center</span></button>
+      </div>
       <p class="placeInfo" id="sheetInfo"></p>
       <p class="placeInfo" id="sheetRotWhy" hidden></p>
     </section>
@@ -466,7 +489,10 @@
         <div class="fld"><label>Y (<span class="unitlbl">mm</span>)</label><input type="number" id="offy" value="0" step="1"></div>
       </div>
       <button id="rotateBtn" title="Rotate 90°"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg> <span>Rotate <span id="rotLbl">0°</span></span></button>
-      <button id="centerBtn">Center</button>
+      <div class="btnrow">
+        <button id="artCorner" title="Snap the artwork to a corner of the safe area"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10V4h6"/><path d="M4 4l7 7"/><rect x="12" y="12" width="8" height="8" rx="1.5"/></svg> <span>Corner</span></button>
+        <button id="centerBtn" title="Centre the artwork on the sheet (or the safe area)"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg> <span>Center</span></button>
+      </div>
       <p class="placeInfo" id="rotWhy" hidden></p>
       <p class="placeInfo" id="placeInfo"></p>
       <!-- the warnings live behind the ⚠ in the title bar: hovering it lays them
