@@ -378,6 +378,10 @@ function render(sel) {
   panel.querySelectorAll("[data-close]").forEach(b => b.onclick = close);
   panel.querySelectorAll("[data-clear]").forEach(b => b.onclick = () => choose(sel, ""));
   if (sel.id === "thickness") wireCalibration(sel);
+  panel.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => {
+    presetTab = { tab: b.dataset.tab, forValue: sel.value };
+    render(sel);
+  });
 }
 
 // ---------- machine ----------
@@ -462,7 +466,9 @@ function viewThickness(sel) {
       // a preset with no rated thickness ("Thin Veneer", cork…) is still listed
       // for any thickness, but it promises nothing — say so rather than "cuts"
       const rated = cuts.some(c => c.thickness_mm != null && c.thickness_mm >= T);
-      const unrated = cuts.some(c => c.thickness_mm == null);
+      // an unrated cut only speaks for a material with no rated cuts at all —
+      // Wood's "Thin Veneer" says nothing about 8 mm stock (as in app.js bestCut)
+      const unrated = cuts.some(c => c.thickness_mm == null) && !cuts.some(c => c.thickness_mm != null);
       cap = rated ? chip("✂ cuts", "cut")
           : unrated ? chip("✂ unrated", "warn")
           : cuts.length ? chip("too thick to cut", "warn")
@@ -491,7 +497,7 @@ function viewThickness(sel) {
        <div class="pk-cardbox"></div>
        <input type="range" min="0.6" max="2.2" step="0.005" value="${mmScale}">
        <button type="button" class="pk-clear" data-cal-done>Done</button></div>` +
-    ref + `<div class="pk-list">${rows}</div>`;
+    ref + `<div class="pk-list" style="--rows:${Math.ceil(opts(sel).length / 2)}">${rows}</div>`;
 }
 function wireCalibration(sel) {
   const box = panel.querySelector(".pk-cal"), cardbox = panel.querySelector(".pk-cardbox");
@@ -537,6 +543,12 @@ function burnScale(ops) {
   const e = ops.map(energy).map(Math.log), lo = Math.min(...e), hi = Math.max(...e);
   return op => hi - lo < 1e-6 ? 0.5 : (Math.log(energy(op)) - lo) / (hi - lo);
 }
+// small labels over a preset's swatch: one sits top-right; two split across
+// the top corners (engrave + cut: DPI top-left, Hz top-right)
+const badges = list => list.length > 1
+  ? `<span class="pk-badges pk-tl"><b>${list[0]}</b></span><span class="pk-badges"><b>${list[1]}</b></span>`
+  : `<span class="pk-badges"><b>${list[0]}</b></span>`;
+let presetTab = { tab: null, forValue: null };   // the tab looked at last, for the preset picker
 function viewPreset(sel) {
   const m = currentMaterial();
   if (!m) return head(sel, "Choose a material first");
@@ -545,25 +557,50 @@ function viewPreset(sel) {
     cut: burnScale(m.operations.filter(o => o.type === "cut")),
   };
   const bar = (label, v, txt = v + "%") => `<div class="pk-bar"><span>${label}</span><i><b style="width:${v}%"></b></i><em>${txt}</em></div>`;
-  const cards = opts(sel).map(o => {
+  const word = t => t < 0.34 ? "light" : t < 0.67 ? "medium" : "deep";
+  const all = opts(sel), single = all.filter(o => !o.value.startsWith("c")), pairs = all.filter(o => o.value.startsWith("c"));
+  // tabs: Cut · Engrave · Cut + Engrave — opening on the kind chosen now,
+  // else the last tab looked at, else the first that has anything
+  const kind = o => o.value.startsWith("c") ? "both" : m.operations[+o.value].type === "cut" ? "cut" : "engrave";
+  const counts = { cut: 0, engrave: 0, both: 0 };
+  all.forEach(o => counts[kind(o)]++);
+  const cur = all.find(o => o.value === sel.value);
+  let tab = presetTab.forValue === sel.value && counts[presetTab.tab] ? presetTab.tab : cur ? kind(cur) : presetTab.tab;
+  if (!counts[tab]) tab = ["cut", "engrave", "both"].find(k => counts[k]) || "engrave";
+  presetTab.tab = tab; presetTab.forValue = sel.value;
+  const tabs = `<div class="pk-tabs" role="tablist">${[["cut", "✂ Cut"], ["engrave", "▦ Engrave"], ["both", "▦✂ Cut + Engrave"]]
+    .map(([k, label]) => `<button type="button" role="tab" data-tab="${k}" aria-selected="${k === tab}"
+      class="${k === tab ? "on" : ""}" ${counts[k] ? "" : "disabled"}>${label}<em>${counts[k]}</em></button>`).join("")}</div>`;
+  const cards = single.filter(o => kind(o) === tab).map(o => {
     const op = m.operations[+o.value], isCut = op.type === "cut";
     const t = scale[op.type](op);
     const art = `<div class="pk-art">${swatch(m.name, isCut
       ? { cut: true, t }
-      : { engrave: true, t, dpi: op.dpi, photo: /photo/i.test(op.label) })}</div>`;
-    const word = t < 0.34 ? "light" : t < 0.67 ? "medium" : "deep";
+      : { engrave: true, t, dpi: op.dpi, photo: /photo/i.test(op.label) })}${badges([isCut ? `${op.freq} Hz` : `${op.dpi} DPI`])}</div>`;
     return card(o.value, sel, art, `<div class="pk-name">${isCut ? "✂" : "▦"} ${esc(presetLabel(op))}</div>
       ${bar("Speed", op.speed)}${bar("Power", op.power)}
-      <div class="pk-bar pk-burn"><span>${isCut ? "Kerf" : "Burn"}</span><i><b style="width:${Math.round(8 + 92 * t)}%"></b></i><em>${word}</em></div>
-      <div class="pk-chips">${chip(isCut ? `${op.freq} Hz` : `${op.dpi} DPI`, isCut ? "cut" : "eng")}${
-        isCut && op.thickness_mm ? chip(`up to ${thk(op.thickness_mm)}`) : ""}</div>`);
+      <div class="pk-bar pk-burn"><span>${isCut ? "Kerf" : "Burn"}</span><i><b style="width:${Math.round(8 + 92 * t)}%"></b></i><em>${word(t)}</em></div>
+      ${isCut && op.thickness_mm ? `<div class="pk-chips">${chip(`up to ${thk(op.thickness_mm)}`)}</div>` : ""}`);
   }).join("");
-  const hidden = m.operations.length - opts(sel).length;
+  // engrave + cut: one job, the engraving first, then the hairlines cut out
+  const pairCards = pairs.filter(() => tab === "both").map(o => {
+    const [, ei, ci] = /^c(\d+):(\d+)$/.exec(o.value), e = m.operations[+ei], c = m.operations[+ci];
+    const t = scale.engrave(e);
+    const art = `<div class="pk-art">${swatch(m.name, { engrave: true, cut: true, t, dpi: e.dpi, photo: /photo/i.test(e.label) })}${badges([`${e.dpi} DPI`, `${c.freq} Hz`])}</div>`;
+    return card(o.value, sel, art, `<div class="pk-name">▦ ${esc(presetLabel(e))}</div>
+      <div class="pk-name pk-then">✂ ${esc(presetLabel(c))}</div>
+      <div class="pk-sub">Engrave S${e.speed} · P${e.power} — burn ${word(t)}</div>
+      <div class="pk-sub">Cut S${c.speed} · P${c.power}${c.thickness_mm ? ` · up to ${thk(c.thickness_mm)}` : ""}</div>
+      <div class="pk-chips">${chip("One job", "eng")}${chip("Cuts hairlines", "cut")}</div>`);
+  }).join("");
+  const hidden = m.operations.length - single.length;
   return head(sel, `${esc(m.name)} · ${esc(finishOf(m.name))}${hidden ? ` · ${hidden} hidden` : ""}`, "",
       `Each sample is an impression of the burn, not a promise: power ÷ speed (× DPI when engraving), compared across
        ${esc(m.name.toLowerCase())}'s own presets. Coarser DPI shows its raster lines. Always test on scrap.` +
-      (hidden ? ` ${hidden} cut preset${hidden > 1 ? "s are" : " is"} hidden: rated thinner than the chosen thickness.` : "")) +
-    `<div class="pk-grid">${cards}</div>`;
+      (hidden ? ` ${hidden} cut preset${hidden > 1 ? "s are" : " is"} hidden: rated thinner than the chosen thickness.` : "") +
+      (pairs.length ? ` <b>Engrave + cut</b> sends one job: the engraving first, then the cut. Only hairline strokes
+       (0.1 mm or thinner) are cut — draw the outlines to cut that way; everything else is engraved.` : "")) +
+    tabs + `<div class="pk-grid">${tab === "both" ? pairCards : cards}</div>`;
 }
 
 // ---------- settings: your own material colours ----------

@@ -30,3 +30,17 @@ command at the top of that file).
 4. Check: every piece falls out cleanly, each has the right hole count, the
    sizes above are within a few tenths of a mm, and each piece sits where the
    bed picture showed it.
+
+## `engrave-cut-test.pdf` — engrave + cut in one job
+
+An A6 page with a **50 mm square drawn as a 0.1 mm red hairline** (the cut) and
+a **solid 30 mm square** centred inside it (the engraving). Written with exact
+geometry by [`make-engrave-cut-test.py`](make-engrave-cut-test.py) — no browser
+in between, so nothing gets rescaled.
+
+1. Load it, pick the material and thickness, then an **Engrave + cut** preset.
+2. Send once, press GO once, on scrap.
+3. Check: the piece falls out at **50.0 mm** square, the engraved square is
+   **30.0 mm**, and it sits **10.0 mm** in from every edge. That proves the cut
+   (1200 units/inch) and the engraving (300/600 dpi) share one scale and origin.
+4. Also check the hairline itself was **cut, not engraved** first.

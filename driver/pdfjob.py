@@ -12,6 +12,7 @@ No Python PDF wheels required (Poppler: pdfinfo / pdftocairo).
 """
 
 import os
+import math
 import re
 import subprocess
 import tempfile
@@ -254,8 +255,28 @@ def _flatten_path(d, steps=16):
     return polys
 
 
-def extract_vectors(path, page=1):
-    """Return {hexcolor: [polylines in mm]} from the PDF's vector content."""
+# A cut line, for jobs that engrave and cut together: a path with a hairline
+# stroke — 0.1 mm or thinner as drawn — whatever its fill (Illustrator's
+# usual "0.001 pt stroke" marks a cut). Everything else is artwork to engrave.
+CUT_STROKE_MAX_MM = 0.1
+
+
+def _stroke_mm(el, m):
+    """The stroke width as drawn (mm), or None when the path isn't stroked."""
+    stroke = el.get("stroke")
+    if not stroke or stroke == "none":
+        return None
+    try:
+        w = float(el.get("stroke-width", "1"))
+    except ValueError:
+        w = 1.0
+    scale = math.sqrt(abs(m[0] * m[3] - m[1] * m[2]))   # the transform's area scale, as a length
+    return w * scale / PT_PER_MM
+
+
+def extract_vectors(path, page=1, cut_only=False):
+    """Return {hexcolor: [polylines in mm]} from the PDF's vector content.
+    cut_only keeps just the cut lines (hairline strokes, see CUT_STROKE_MAX_MM)."""
     with tempfile.TemporaryDirectory() as td:
         svg = os.path.join(td, "v.svg")
         _run(["pdftocairo", "-svg", "-f", str(page), "-l", str(page), path, svg])
@@ -281,6 +302,12 @@ def extract_vectors(path, page=1):
                 x, y = float(el.get("x", 0) or 0), float(el.get("y", 0) or 0)
                 walk(ref, _matmul(m, (1, 0, 0, 1, x, y)), via_use=True)
             return
+        if tag == "path" and el.get("d") and cut_only:
+            sw = _stroke_mm(el, m)
+            if sw is None or sw > CUT_STROKE_MAX_MM:
+                for child in el:
+                    walk(child, m)
+                return
         if tag == "path" and el.get("d"):
             color = el.get("stroke") or el.get("fill") or "#000000"
             if color == "none":

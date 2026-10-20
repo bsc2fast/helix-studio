@@ -219,11 +219,24 @@ as environment variables.
    you left them next time you start; the preset does not. Engrave presets
    (`▦`) raster the artwork; cut presets (`✂`) follow its vector lines. Presets
    that cannot cut through the thickness you chose are hidden.
-   **The bed shows the burn, not the PDF:** artwork is drawn on the stock as
+   **Engrave + cut** presets (where the material and thickness allow a cut)
+   send **one job**: the engraving first, then the cut, so one GO does both.
+   There's one per engrave style, each paired with the thinnest rated cut that
+   goes through the stock. Only **hairline strokes** (0.1 mm or thinner — e.g.
+   Illustrator's 0.001 pt) are cut; everything else is engraved, with the
+   hairlines left out of the engraving. Check a new setup with
+   `samples/engrave-cut-test.pdf` first.
+      **The bed shows the burn, not the PDF:** artwork is drawn on the stock as
    the laser will leave it, darker and deeper for harder presets. The raster is
    1-bit — every pixel that isn't near-white burns at full power — so greys and
    colours all burn alike, and the preview shows exactly that.
 4. **Send.** The job appears on the laser's queue; walk over and press **GO**.
+   The Send button shows the **estimated job time** (`≈11:47`). It comes from
+   the job exactly as the driver will emit it — rows swept and their length
+   for an engrave, path count and length for a cut — fitted to jobs timed on
+   this machine. After a send, type how long it really took into **Took**
+   (`mm:ss`): it's kept in `timings.json` (gitignored) and every later estimate
+   uses it. Cuts show `~` until one has been timed.
 
 **To engrave and then cut the same piece**, send twice: choose the engrave
 preset and send, then switch to the cut preset and send again without moving

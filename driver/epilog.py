@@ -236,7 +236,10 @@ def build_job(parts, dpi, title="job", autofocus=False, overcut_mm=0.5):
             bounds_x.append(mx)
             bounds_y.append(my)
         elif isinstance(p, VectorPart):
-            rendered.append(("vector", _vector_pcl(p, dpi, overcut_mm)))
+            # HP-GL coordinates are always 1/1200" on this machine, whatever the
+            # job's raster dpi (see VECTOR_DPI) — so a vector part that shares a
+            # job with a 300/600 dpi raster is still drawn to scale
+            rendered.append(("vector", _vector_pcl(p, VECTOR_DPI, overcut_mm)))
             allpts = [pt for pl in p.polylines_mm for pt in pl]
             if allpts:
                 bounds_x.append(max(mm2units(x, dpi) for x, _ in allpts))

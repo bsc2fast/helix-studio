@@ -18,6 +18,7 @@ sends them to the Epilog Helix.
   POST /api/prefs            -> merge a few of those keys back into prefs.json
   GET  /api/finishes         -> your own material colours (finishes.json)
   POST /api/finishes         -> replace them (from the Settings page)
+  POST /api/timings          -> log how long a sent job really took (timings.json)
   GET  /api/images           -> picture files in web/img/ (material/machine photos)
   GET  /api/laser/status     -> {host, online, busy}: is the laser's LPD port up?
   POST /api/laser/scan       -> sweep the local /24s for LPD hosts; adopts the
@@ -40,7 +41,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "driver"))
@@ -295,6 +296,124 @@ def _rot_point(x, y, R, cw, ch):
     return (x, y)
 
 
+# ---------- job time estimate ----------
+# Display only — it never changes what is sent. The Helix engraves both ways,
+# row by row, each row trimmed to its burned bytes (driver/epilog.py), so a
+# raster takes about
+#     rows × turnaround  +  swept length ÷ (k × speed%)
+# and a cut about  paths × start-up  +  path length ÷ (k × speed%).
+# Epilog doesn't publish the head speed, so both numbers are fitted to jobs
+# timed on the machine: timings.json (gitignored) grows as times are logged,
+# seeded with the first one measured.
+TIMINGS_PATH = os.path.join(HERE, "timings.json")
+SEED_TIMINGS = {"raster": [
+    # sound-prasanth.pdf, wood, Clipart/Text 600 DPI S30 P100 — 11 min 47 s (2026-10-16)
+    {"rows": 2741, "span_mm": 242287.6, "speed": 30, "dpi": 600, "seconds": 707, "seed": True},
+], "vector": []}
+DEFAULT_TURN_S = {"raster": 0.06, "vector": 0.2}         # per row / per path, until it can be fitted
+DEFAULT_MM_S_PER_PCT = {"raster": 15.0, "vector": 7.6}   # head speed per 1 % (guesses until timed)
+
+
+def load_timings():
+    out = {"raster": list(SEED_TIMINGS["raster"]), "vector": list(SEED_TIMINGS["vector"])}
+    try:
+        with open(TIMINGS_PATH) as f:
+            saved = json.load(f)
+        for k in ("raster", "vector"):
+            out[k] += [t for t in saved.get(k, []) if isinstance(t, dict)]
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def fit_time_model(kind, samples):
+    """(turnaround s, s per (mm/speed%), calibrated?) from timed jobs:
+    T = a*n + b*len/speed, n = rows (raster) or paths (vector)."""
+    n_key, l_key = ("rows", "span_mm") if kind == "raster" else ("paths", "length_mm")
+    pts = [(t[n_key], t[l_key] / max(1, t["speed"]), t["seconds"]) for t in samples
+           if t.get(n_key) and t.get(l_key) and t.get("speed") and t.get("seconds")]
+    if len(pts) >= 2:   # least squares through the origin, two unknowns
+        snn = sum(n * n for n, _, _ in pts); sll = sum(l * l for _, l, _ in pts)
+        snl = sum(n * l for n, l, _ in pts)
+        snt = sum(n * t for n, _, t in pts); slt = sum(l * t for _, l, t in pts)
+        det = snn * sll - snl * snl
+        if det > 1e-9 * snn * sll:
+            a = (snt * sll - slt * snl) / det
+            b = (slt * snn - snt * snl) / det
+            if a > 0 and b > 0:
+                return a, b, True
+    a = DEFAULT_TURN_S[kind]
+    if pts:   # one job (or a degenerate set): keep the turnaround, fit the speed
+        bs = [(t - a * n) / l for n, l, t in pts if l > 0 and t > a * n]
+        if bs:
+            return a, sum(bs) / len(bs), True
+    return a, 1.0 / DEFAULT_MM_S_PER_PCT[kind], False
+
+
+def raster_stats(img, dpi):
+    """Rows the head sweeps and their total length, exactly as the driver emits
+    them: dark (< 128) pixels burn, each row trimmed to whole bytes."""
+    mask = img.convert("L").point(lambda v: 1 if v < 128 else 0)
+    w, h = mask.size
+    data = mask.tobytes()   # one byte per pixel, 1 = burn: find/rfind per row run in C
+    rows = span_px = 0
+    for y in range(h):
+        x0 = data.find(1, y * w, (y + 1) * w)
+        if x0 < 0:
+            continue
+        x1 = data.rfind(1, y * w, (y + 1) * w)
+        rows += 1
+        span_px += ((x1 - y * w) // 8 - (x0 - y * w) // 8 + 1) * 8
+    return {"rows": rows, "span_mm": round(span_px / dpi * 25.4, 1), "dpi": dpi}
+
+
+def vector_stats(polylines):
+    length = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for pl in polylines for a, b in zip(pl, pl[1:]))
+    return {"paths": sum(1 for pl in polylines if len(pl) > 1), "length_mm": round(length, 1)}
+
+
+def estimate(kind, stats, speed):
+    a, b, calibrated = fit_time_model(kind, load_timings()[kind])
+    n = stats["rows"] if kind == "raster" else stats["paths"]
+    l = stats["span_mm"] if kind == "raster" else stats["length_mm"]
+    # a and b come back too, so the page can redo the sum for another speed
+    return dict(stats, kind=kind, speed=speed, calibrated=calibrated, a=a, b=b,
+                seconds=round(a * n + b * l / max(1, speed)))
+
+
+def fast_burn_mask(rgb):
+    """The same rule as pdfjob.raster_from_colors(colors=None) — a pixel burns
+    unless all three channels are > 245 — done with PIL instead of a Python
+    loop. Used for estimates only; a real send still builds its raster with
+    the driver's own function."""
+    r, g, b = rgb.convert("RGB").split()
+    darkest = ImageChops.darker(ImageChops.darker(r, g), b)
+    return darkest.point(lambda v: 255 if v > 245 else 0)
+
+
+def log_timing(t):
+    """Add one timed job (from the page) to timings.json."""
+    kind = t.get("kind")
+    if kind not in ("raster", "vector"):
+        raise ValueError("kind must be raster or vector")
+    keys = ("rows", "span_mm", "dpi") if kind == "raster" else ("paths", "length_mm")
+    rec = {k: float(t[k]) for k in keys}
+    rec["speed"] = float(t["speed"]); rec["seconds"] = float(t["seconds"])
+    if not (1 <= rec["speed"] <= 100 and 1 <= rec["seconds"] <= 48 * 3600):
+        raise ValueError("speed or time out of range")
+    try:
+        with open(TIMINGS_PATH) as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        saved = {}
+    saved.setdefault(kind, []).append(rec)
+    tmp = TIMINGS_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(saved, f, indent=2)
+    os.replace(tmp, TIMINGS_PATH)
+    return rec
+
+
 def _rot_image(img, R):
     if R in (90, 180, 270):
         return img.rotate(-R, expand=True)  # negative = clockwise; exact for 90s
@@ -341,8 +460,12 @@ def load_page(s, n):
         vb = (min(x for x, _ in pts), min(y for _, y in pts), max(x for x, _ in pts), max(y for _, y in pts))
         bbox = vb if not bbox else (min(bbox[0], vb[0]), min(bbox[1], vb[1]),
                                     max(bbox[2], vb[2]), max(bbox[3], vb[3]))
+    try:   # the hairline strokes alone: what an engrave + cut job cuts
+        cutv = [pl for pls in pdfjob.extract_vectors(s["pdf_path"], page=n, cut_only=True).values() for pl in pls]
+    except Exception:
+        cutv = []
     pg = {"rgb": rgb, "preview_png": buf.getvalue(),
-          "bbox": bbox, "vectors": _simplify(allv),
+          "bbox": bbox, "vectors": _simplify(allv), "cut_vectors": _simplify(cutv),
           "size_mm": (rgb.size[0] / PREVIEW_DPI * 25.4, rgb.size[1] / PREVIEW_DPI * 25.4),
           "images": page_images(s["pdf_path"], n)}
     s["pages"][n] = pg
@@ -384,6 +507,7 @@ def page_json(sid, n, pg):
             "w_mm": round(b[2] - b[0], 2), "h_mm": round(b[3] - b[1], 2),
         } if b else None,
         "vectors": pg["vectors"],
+        "cut_vectors": pg.get("cut_vectors", []),
         "images": pg.get("images"),
     }
 
@@ -504,6 +628,12 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/prefs":
                 patch = json.loads(self._read_body().decode() or "{}")
                 return self._send_json(save_prefs(patch if isinstance(patch, dict) else {}))
+            if self.path == "/api/timings":
+                t = json.loads(self._read_body().decode() or "{}")
+                try:
+                    return self._send_json(log_timing(t if isinstance(t, dict) else {}))
+                except (KeyError, TypeError, ValueError) as e:
+                    return self._send_json({"error": "bad timing: %s" % e}, 400)
             if self.path == "/api/finishes":
                 data = json.loads(self._read_body().decode() or "{}")
                 return self._send_json(save_finishes(data))
@@ -567,6 +697,9 @@ class Handler(BaseHTTPRequestHandler):
         host = req.get("host", CFG["laser_host"])
         autofocus = bool(req.get("autofocus", False))
         dry_run = bool(req.get("dry_run", False))
+        # estimate_only: work out the job's time without building it (implies dry_run)
+        estimate_only = bool(req.get("estimate_only", False))
+        dry_run = dry_run or estimate_only
         mc = CFG["machine"]
         safety = mc.get("safety_mm", mc.get("margin_mm", 3))
         min_x = min_y = safety
@@ -644,8 +777,80 @@ class Handler(BaseHTTPRequestHandler):
                         "placement": placement, "blocked": True,
                     }, 400)
 
-        # ---- single-operation send: one preset applied to every placed page ----
         op = req.get("operation")
+        # ---- engrave + cut in ONE job: the raster first, then the cuts ----
+        # The cut lines are the hairline strokes (pdfjob.CUT_STROKE_MAX_MM);
+        # everything else is engraved, with the hairlines blanked out of the
+        # raster so a line isn't engraved before it's cut. Both parts share the
+        # job; the vector part's coordinates stay at 1200/in (epilog.build_job).
+        if op and op.get("type") == "combo":
+            eop, cop = op["engrave"], op["cut"]
+            dpi = int(eop["dpi"])
+            vecs, masks, cuts = {}, [], []
+            for p in placed:
+                if p["key"] not in vecs:
+                    vecs[p["key"]] = [pl for pls in pdfjob.extract_vectors(
+                        p["s"]["pdf_path"], page=p["page"], cut_only=True).values() for pl in pls]
+                if not vecs[p["key"]]:
+                    return self._send_json({"error": "no cut lines on %s — draw the outlines to cut as "
+                                                     "hairline strokes (0.1 mm or thinner), or use an engrave "
+                                                     "preset" % where(p), "placement": placement}, 400)
+            for p in placed:
+                if estimate_only:
+                    cache = p["s"].setdefault("est_masks", {})
+                    ck = (p["page"], dpi)
+                    if ck not in cache:
+                        cache[ck] = fast_burn_mask(pdfjob.render_rgb(p["s"]["pdf_path"], dpi=dpi, page=p["page"]))
+                    full = cache[ck].copy()
+                else:
+                    full = pdfjob.raster_from_colors(
+                        pdfjob.render_rgb(p["s"]["pdf_path"], dpi=dpi, page=p["page"]), colors=None)
+                # blank the cut lines out of the engraving: a 0.4 mm band covers a
+                # 0.1 mm hairline, its anti-aliased edge, and the ~0.1 % scale
+                # pdftocairo gives stroked paths (so the line may sit ~0.08 mm off)
+                draw = ImageDraw.Draw(full)
+                w = max(3, int(round(0.4 / 25.4 * dpi)))
+                for pl in vecs[p["key"]]:
+                    draw.line([(x / 25.4 * dpi, y / 25.4 * dpi) for x, y in pl], fill=255, width=w, joint="curve")
+                bx0, by0, bx1, by1 = p["bbox"]
+                cx0 = int(round(bx0 / 25.4 * dpi)); cy0 = int(round(by0 / 25.4 * dpi))
+                cx1 = int(round(bx1 / 25.4 * dpi)); cy1 = int(round(by1 / 25.4 * dpi))
+                masks.append((p, _rot_image(full.crop((cx0, cy0, cx1, cy1)), p["R"])))
+                cuts.extend([[(lambda rx, ry: (rx + p["ox"], ry + p["oy"]))(
+                                  *_rot_point(x - bx0, y - by0, p["R"], p["cw"], p["ch"]))
+                              for (x, y) in pl] for pl in vecs[p["key"]]])
+            ux = min(p["ox"] for p in placed)
+            uy = min(p["oy"] for p in placed)
+            U = lambda mm: epilog.mm2units(mm, dpi)
+            spots = [(U(p["ox"]) - U(ux), U(p["oy"]) - U(uy), m) for p, m in masks]
+            sheet = Image.new("L", (max(x + m.size[0] for x, _, m in spots),
+                                    max(y + m.size[1] for _, y, m in spots)), 255)
+            for x, y, m in spots:
+                box = (x, y, x + m.size[0], y + m.size[1])
+                sheet.paste(ImageChops.darker(sheet.crop(box), m), box)
+            r_est = estimate("raster", raster_stats(sheet, dpi), eop["speed"])
+            v_est = estimate("vector", vector_stats(cuts), cop["speed"])
+            est = {"kind": "combo", "seconds": r_est["seconds"] + v_est["seconds"],
+                   "calibrated": r_est["calibrated"] and v_est["calibrated"], "parts": [r_est, v_est]}
+            if estimate_only:
+                return self._send_json({"estimate": est, "placement": placement})
+            parts = []
+            if ImageChops.invert(sheet).getbbox() is not None:   # anything left to engrave
+                parts.append(epilog.RasterPart(sheet, power=eop["power"], speed=eop["speed"],
+                                               dpi=dpi, x_mm=ux, y_mm=uy))
+            parts.append(epilog.VectorPart(cuts, power=cop["power"], speed=cop["speed"],
+                                           frequency=cop.get("freq", 500)))
+            job = epilog.build_job(parts, dpi=dpi, title="engrave+cut", autofocus=autofocus)
+            sent = not dry_run
+            if sent:
+                with SENDING:
+                    epilog.send_lpd(host, job, jobname="001", title="engrave+cut",
+                                    require_ack=not req.get("no_ack", False))
+            return self._send_json({"jobs": [{"title": "engrave+cut", "bytes": len(job), "sent": sent}],
+                                    "dry_run": dry_run, "host": host, "placement": placement,
+                                    "estimate": est})
+
+        # ---- single-operation send: one preset applied to every placed page ----
         if op and op.get("type") in ("engrave", "cut"):
             title = op["type"]
             if op["type"] == "engrave":
@@ -656,7 +861,15 @@ class Handler(BaseHTTPRequestHandler):
                 # between pages cost nothing and it stays a single raster part.
                 masks, renders = [], {}
                 for p in placed:
-                    if p["key"] not in renders:
+                    if p["key"] not in renders and estimate_only:
+                        # cached per page and dpi; the same burn rule, faster
+                        cache = p["s"].setdefault("est_masks", {})
+                        ck = (p["page"], dpi)
+                        if ck not in cache:
+                            cache[ck] = fast_burn_mask(
+                                pdfjob.render_rgb(p["s"]["pdf_path"], dpi=dpi, page=p["page"]))
+                        renders[p["key"]] = cache[ck]
+                    elif p["key"] not in renders:
                         rgb = pdfjob.render_rgb(p["s"]["pdf_path"], dpi=dpi, page=p["page"])
                         renders[p["key"]] = pdfjob.raster_from_colors(rgb, colors=None)  # all ink
                     bx0, by0, bx1, by1 = p["bbox"]
@@ -674,6 +887,9 @@ class Handler(BaseHTTPRequestHandler):
                 for x, y, m in spots:
                     box = (x, y, x + m.size[0], y + m.size[1])
                     sheet.paste(ImageChops.darker(sheet.crop(box), m), box)
+                est = estimate("raster", raster_stats(sheet, dpi), op["speed"])
+                if estimate_only:
+                    return self._send_json({"estimate": est, "placement": placement})
                 part = epilog.RasterPart(sheet, power=op["power"], speed=op["speed"],
                                          dpi=dpi, x_mm=ux, y_mm=uy)
                 job = epilog.build_job([part], dpi=dpi, title=title, autofocus=autofocus)
@@ -689,6 +905,9 @@ class Handler(BaseHTTPRequestHandler):
                                        for (x, y) in pl] for pl in vecs[p["key"]]])
                 if not polylines:
                     return self._send_json({"error": "no vector lines found to cut"}, 400)
+                est = estimate("vector", vector_stats(polylines), op["speed"])
+                if estimate_only:
+                    return self._send_json({"estimate": est, "placement": placement})
                 part = epilog.VectorPart(polylines, power=op["power"], speed=op["speed"],
                                          frequency=op.get("freq", 500))
                 job = epilog.build_job([part], dpi=epilog.VECTOR_DPI, title=title, autofocus=autofocus)
@@ -698,7 +917,8 @@ class Handler(BaseHTTPRequestHandler):
                     epilog.send_lpd(host, job, jobname="001", title=title,
                                     require_ack=not req.get("no_ack", False))
             return self._send_json({"jobs": [{"title": title, "bytes": len(job), "sent": sent}],
-                                    "dry_run": dry_run, "host": host, "placement": placement})
+                                    "dry_run": dry_run, "host": host, "placement": placement,
+                                    "estimate": est})
 
         # ---- per-colour assignments: the original single-page path (first item) ----
         p = placed[0]

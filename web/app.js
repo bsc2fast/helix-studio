@@ -898,6 +898,7 @@ function attachDrag(art, it) {
 function updatePlacement() {
   if (!bedEls || !state.docs.length) return;
   const B = bounds(), S = sheetBox(), multi = state.items.length > 1 || manyDocs();
+  const comboOp = (currentOp() || {}).type === "combo";
   const problems = [], notes = [];
 
   // each page: in bounds? then draw it
@@ -921,6 +922,8 @@ function updatePlacement() {
     E.tag.textContent = pageTag(it);
     if (multi) E.tag.removeAttribute("hidden"); else E.tag.setAttribute("hidden", "hidden");
     if (!c) problems.push(`⚠ No printable artwork detected on ${pageName(it)}.`);
+    else if (comboOp && !(it.pd.cut_vectors || []).length)
+      problems.push(`⚠ No cut lines on ${pageName(it)} — engrave + cut only cuts hairline strokes (0.1 mm or thinner). Use an engrave preset, or draw the outlines to cut as hairlines.`);
     else if (!it.inBounds) problems.push(`⚠ ${multi ? cap(pageName(it)) + " is i" : "I"}nside the ${len(B.s)} ${unit()} safety margin. Move it within the dashed boundary.`);
     if (S && c && (ink.x < S.x - 0.01 || ink.y < S.y - 0.01 ||   // the ink, not the page frame
                    ink.x + ink.w > S.x + S.w + 0.01 || ink.y + ink.h > S.y + S.h + 0.01))
@@ -1000,6 +1003,7 @@ function updatePlacement() {
     : "";
   $("#sendBtn").disabled = !!why;
   $("#sendBtn").title = why;
+  refreshEta();
   renderRail();
 }
 
@@ -1130,10 +1134,18 @@ window.addEventListener("resize", endCornerPick);
 
 // ---------- material + preset dropdown ----------
 function currentMaterial() { return state.materials.find(m => m.name === $("#material").value) || null; }
+// a preset is one operation ("3": an index into the material's list) or an
+// engrave + cut pair ("c1:4": engrave #1, then cut #4, in one job)
 function currentOp() {
-  const m = currentMaterial(), i = $("#preset").value;
-  return (m && i !== "") ? m.operations[+i] : null;
+  const m = currentMaterial(), v = $("#preset").value;
+  if (!m || v === "") return null;
+  const c = /^c(\d+):(\d+)$/.exec(v);
+  if (c) return { type: "combo", engrave: m.operations[+c[1]], cut: m.operations[+c[2]] };
+  return m.operations[+v];
 }
+// the engrave side of a preset (for the burn look), and its cut side
+const engraveOf = op => op && (op.type === "combo" ? op.engrave : op.type === "engrave" ? op : null);
+const cutOf = op => op && (op.type === "combo" ? op.cut : op.type === "cut" ? op : null);
 // a preset's name for display: its "(300 DPI)" goes (the DPI is shown anyway),
 // and an inch size keeps — or gains — its millimetres: Cutting 1/8" (3 mm)
 function presetLabel(op) {
@@ -1143,6 +1155,16 @@ function presetLabel(op) {
     const [a, b] = v.split("/"), mm = (b ? a / b : +a) * 25.4;
     return `${all} (≈${mm < 10 ? Math.round(mm * 10) / 10 : Math.round(mm)} mm)`;
   });
+}
+function bestCut(m, T) {
+  const cuts = m.operations.map((op, i) => [op, i]).filter(([op]) => op.type === "cut");
+  const rated = cuts.filter(([op]) => op.thickness_mm != null && (T == null || op.thickness_mm >= T))
+    .sort((a, b) => a[0].thickness_mm - b[0].thickness_mm);
+  if (rated.length) return rated[0];
+  // an unrated cut ("Thin Veneer") stands in only where the material has no
+  // rated cuts at all (cork, fleece…) — never to "cut" stock thicker than the
+  // rated ones go
+  return cuts.some(([op]) => op.thickness_mm != null) ? null : cuts.find(([op]) => op.thickness_mm == null) || null;
 }
 function renderPresets() {
   const m = currentMaterial(), sel = $("#preset");
@@ -1159,6 +1181,19 @@ function renderPresets() {
     const thk = (op.type === "cut" && op.thickness_mm && !/mm\)/.test(label)) ? ` · ≤${op.thickness_mm}mm` : "";
     sel.appendChild(new Option(`${icon} ${label} · S${op.speed} P${op.power} · ${extra}${thk}`, i));
   });
+  // engrave + cut, one job: every engrave preset paired with the cut that
+  // suits the thickness — the thinnest rated cut that goes through it, else an
+  // unrated one. Only offered when the material can do both.
+  const cut = m && bestCut(m, T);
+  const engs = m ? m.operations.map((op, i) => [op, i]).filter(([op]) => op.type === "engrave") : [];
+  if (cut && engs.length) {
+    const og = document.createElement("optgroup");
+    og.label = "Engrave + cut";
+    engs.forEach(([op, i]) => og.appendChild(new Option(
+      `▦✂ ${presetLabel(op)} + ${presetLabel(cut[0])} · S${op.speed}/${cut[0].speed} P${op.power}/${cut[0].power} · ${op.dpi}dpi`,
+      `c${i}:${cut[1]}`)));
+    sel.appendChild(og);
+  }
   // the value is an index into the material's own list: carrying it over to a
   // different material would land on an unrelated preset (Wood's #3 is an
   // engrave, Acrylic's #3 a cut) — so a new material starts on its first
@@ -1256,7 +1291,8 @@ function burnLook() {
   const look = window.HSLook, mat = $("#material").value, op = currentOp();
   const L = look && mat ? look.look(mat, state.finish)
                         : { mark: "#2a2a2a", frost: false, organic: false, dark: false };
-  return { L, t: look && mat && op ? look.burn(mat, op) : 0.5 };
+  const e = engraveOf(op) || op;
+  return { L, t: look && mat && e ? look.burn(mat, e) : 0.5 };
 }
 async function renderBurn(it) {
   const { L, t } = burnLook(), pd = it.pd;
@@ -1285,7 +1321,7 @@ async function renderBurn(it) {
 }
 // redraw every page for the current material, colour and preset
 function highlight() {
-  const op = currentOp(), isCut = op && op.type === "cut";
+  const op = currentOp(), isCut = op && op.type === "cut", isCombo = op && op.type === "combo";
   const { L } = burnLook();
   // the Artwork card's title bar wears the colour the burn will leave
   const bar = $("#placeSection h2"), look = window.HSLook;
@@ -1303,7 +1339,15 @@ function highlight() {
     // edge on wood, frosted white on acrylic…), at a fixed on-screen width,
     // gently pulsing (index.html)
     els.cutlines.setAttribute("stroke", L.mark);
-    if (isCut) els.cutlines.removeAttribute("hidden"); else els.cutlines.setAttribute("hidden", "hidden");
+    // a plain cut follows every path; engrave + cut cuts only the hairlines
+    const mode = isCombo ? "hair" : "all";
+    if (it.cutMode !== mode) {
+      it.cutMode = mode;
+      els.cutlines.innerHTML = "";
+      ((isCombo ? it.pd.cut_vectors : it.pd.vectors) || []).forEach(pl =>
+        els.cutlines.appendChild(mk("polyline", { points: pl.map(p => p[0] + "," + p[1]).join(" "), fill: "none" })));
+    }
+    if (isCut || isCombo) els.cutlines.removeAttribute("hidden"); else els.cutlines.setAttribute("hidden", "hidden");
     if (!isCut) renderBurn(it);
   });
 }
@@ -1315,15 +1359,69 @@ window.hsFinishesChanged = () => {
   drawSheet(); highlight();
 };
 
+// ---------- job time estimate (shown on Send) ----------
+// The server measures the job exactly as the driver will emit it — rows swept
+// and their length for an engrave, path count and length for a cut — and fits
+// time = a·count + b·length/speed to jobs timed on the machine. It's asked again
+// only when the layout, DPI or job type change (debounced); a new speed is just
+// the same sum redone here. After a real send, "Took mm:ss" logs the true time.
+const opFields = op => ({ type: op.type, speed: op.speed, power: op.power, dpi: op.dpi, freq: op.freq });
+const jobOperation = op => op.type === "combo"
+  ? { type: "combo", engrave: opFields(op.engrave), cut: opFields(op.cut) } : opFields(op);
+const jobItems = () => state.items.map(it => ({ doc: it.doc, page: it.page,
+                                                offset_mm: [inkRect(it).x, inkRect(it).y], rotation: it.rot }));
+const clock = sec => {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+};
+let eta = { key: "", est: null, timer: null, seq: 0 };
+function etaSeconds(est, op) {
+  if (est.kind === "combo") return etaSeconds(est.parts[0], op.engrave) + etaSeconds(est.parts[1], op.cut);
+  const n = est.kind === "raster" ? est.rows : est.paths, l = est.kind === "raster" ? est.span_mm : est.length_mm;
+  return est.a * n + est.b * l / Math.max(1, op.speed);
+}
+function etaWhat(est, op) {
+  return est.kind === "combo" ? `${etaWhat(est.parts[0], op.engrave)}; then ${etaWhat(est.parts[1], op.cut)}`
+    : est.kind === "raster" ? `${est.rows.toLocaleString()} rows, ${(est.span_mm / 1000).toFixed(1)} m swept at speed ${op.speed}`
+    : `${est.paths} path${est.paths === 1 ? "" : "s"}, ${len(est.length_mm)} ${unit()} of cut at speed ${op.speed}`;
+}
+function showEta() {
+  const op = currentOp(), el = $("#sendEta"), est = eta.est;
+  if (!op || !est || !state.items.length) { el.textContent = ""; el.title = ""; return; }
+  const sec = etaSeconds(est, op);
+  el.textContent = ` · ${est.calibrated ? "≈" : "~"}${clock(sec)}`;
+  el.title = `Estimated job time ${clock(sec)} — ${etaWhat(est, op)}` +
+    (est.calibrated ? "" : ". No timed cut yet, so the cut part is a rough guess — log one after sending to calibrate.");
+}
+function refreshEta() {
+  const op = currentOp();
+  if (!op || !state.items.length || state.items.some(it => !it.pd.content_mm)) { eta.est = null; eta.key = ""; showEta(); return; }
+  // what changes the measurement: the job type, its DPI, and the layout (rounded)
+  const key = JSON.stringify([op.type, (engraveOf(op) || {}).dpi || 0,
+    jobItems().map(i => [i.doc, i.page, i.rotation, Math.round(i.offset_mm[0]), Math.round(i.offset_mm[1])])]);
+  if (key === eta.key) { showEta(); return; }
+  eta.key = key; eta.est = null; showEta();
+  clearTimeout(eta.timer);
+  const seq = ++eta.seq;
+  eta.timer = setTimeout(async () => {
+    try {
+      const r = await (await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: state.docs[0].id, operation: jobOperation(op), items: jobItems(), estimate_only: true }) })).json();
+      if (seq === eta.seq && r.estimate) { eta.est = r.estimate; showEta(); }
+    } catch (e) {}
+  }, 600);
+}
+
 // ---------- send (one operation over every page on the bed, as one job) ----------
 $("#sendBtn").onclick = async () => {
   const op = currentOp();
   if (!op) { alert("Choose a material and preset first."); return; }
-  const operation = { type: op.type, speed: op.speed, power: op.power, dpi: op.dpi, freq: op.freq };
+  const operation = jobOperation(op);
   const btn = $("#sendBtn"); btn.disabled = true; state.sending = true; $("#sendLbl").textContent = "Sending…";
   const out = $("#out"); out.classList.add("on"); out.textContent = "working…";
-  const items = state.items.map(it => ({ doc: it.doc, page: it.page,
-                                         offset_mm: [inkRect(it).x, inkRect(it).y], rotation: it.rot }));
+  $("#timeLog").hidden = true;
+  const items = jobItems();
   const files = new Set(items.map(i => i.doc)).size;
   try {
     const data = await (await fetch("/api/send", {
@@ -1331,13 +1429,36 @@ $("#sendBtn").onclick = async () => {
       body: JSON.stringify({ id: state.docs[0].id, host: state.laserHost, operation, items, autofocus: false }),
     })).json();
     if (data.error) out.textContent = "ERROR: " + data.error;
-    else out.textContent = `Sent to ${data.host} — press GO on the machine\n· ${data.jobs[0].title}` +
-      (items.length > 1 ? ` (${items.length} pages${files > 1 ? ` from ${files} files` : ""})` : "") +
-      `: ${data.jobs[0].bytes} bytes → SENT`;
+    else {
+      out.textContent = `Sent to ${data.host} — press GO on the machine\n· ${data.jobs[0].title}` +
+        (items.length > 1 ? ` (${items.length} pages${files > 1 ? ` from ${files} files` : ""})` : "") +
+        `: ${data.jobs[0].bytes} bytes → SENT` +
+        (data.estimate ? `\n· estimated ${clock(data.estimate.seconds)}` : "");
+      // once it's done, the true time sharpens every later estimate
+      if (data.estimate && data.estimate.kind !== "combo") {
+        lastSent = data.estimate; $("#tookIn").value = ""; $("#timeLog").hidden = false;
+      }
+    }
   } catch (e) { out.textContent = "ERROR: " + e.message; }
   state.sending = false; $("#sendLbl").textContent = "Send";
   updatePlacement();
   pollLaser();   // re-check now: a failed send usually means the laser dropped
 };
+
+// "Took mm:ss" after a send: log the real time for that job
+let lastSent = null;
+$("#tookSave").onclick = async () => {
+  const v = $("#tookIn").value.trim(), m = v.match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$|^(\d+)$/);
+  if (!m || !lastSent) { $("#tookIn").focus(); return; }
+  const seconds = m[4] ? +m[4] * 60 : (+(m[1] || 0)) * 3600 + +m[2] * 60 + +m[3];   // a bare number is minutes
+  const r = await (await fetch("/api/timings", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...lastSent, seconds }) })).json();
+  if (r.error) { $("#out").textContent += `\n· couldn't log the time: ${r.error}`; return; }
+  $("#timeLog").hidden = true;
+  $("#out").textContent += `\n· took ${clock(seconds)} — logged; estimates now include it`;
+  eta.key = "";   // re-measure with the new fit
+  refreshEta();
+};
+$("#tookIn").onkeydown = e => { if (e.key === "Enter") $("#tookSave").click(); };
 
 boot();
