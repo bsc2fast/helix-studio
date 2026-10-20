@@ -274,6 +274,92 @@ def _stroke_mm(el, m):
     return w * scale / PT_PER_MM
 
 
+# ---------------------------------------------------------------------------
+# Decoding a page into cut lines and engraving — for jobs that do both.
+# Each drawn path is read with its paint (stroke colour, stroke width as drawn,
+# fill), styles inherited the SVG way; a decode mode then says which paths are
+# cut lines. Everything else is engraved.
+#   hairline : stroked, no wider than max_mm (Epilog's "0.001 pt line" habit)
+#   color    : stroked in the cut colour (default red) at any width — or, with
+#              no stroke, filled in it (an outlined stroke)
+#   stroke   : any stroked outline is a cut; filled shapes and text engrave
+# ---------------------------------------------------------------------------
+DECODE_MODES = ("hairline", "color", "stroke")
+DECODE_DEFAULT = {"mode": "hairline", "max_mm": CUT_STROKE_MAX_MM, "color": "#ff0000"}
+COLOR_NEAR = 90   # RGB distance: Illustrator's CMYK red (237,28,36) is ~49 from #ff0000
+
+
+def _rgb(h):
+    return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def color_near(a, b, tol=COLOR_NEAR):
+    if not a or not b:
+        return False
+    return math.dist(_rgb(a), _rgb(b)) <= tol
+
+
+def is_cut(p, decode=None):
+    """Is this path (from extract_paths) a cut line under the decode mode?"""
+    d = dict(DECODE_DEFAULT, **(decode or {}))
+    if d["mode"] == "stroke":
+        return p["stroke"] is not None
+    if d["mode"] == "color":
+        if p["stroke"] is not None:
+            return color_near(p["stroke"], d["color"])
+        return p["fill"] is not None and color_near(p["fill"], d["color"])
+    return p["stroke"] is not None and p["stroke_mm"] <= d["max_mm"] + 1e-9
+
+
+def extract_paths(path, page=1):
+    """Every drawn path on the page with its paint, in mm:
+    [{"pts": [[(x, y), …], …], "stroke": "#rrggbb" | None, "stroke_mm": float | None,
+      "fill": "#rrggbb" | None}]"""
+    with tempfile.TemporaryDirectory() as td:
+        svg = os.path.join(td, "v.svg")
+        _run(["pdftocairo", "-svg", "-f", str(page), "-l", str(page), path, svg])
+        tree = ET.parse(svg)
+    root = tree.getroot()
+    ids = {el.get("id"): el for el in root.iter() if el.get("id")}
+    out = []
+
+    def paint(v):
+        return None if (v is None or v.strip() == "none") else _norm_color(v)
+
+    def walk(el, m, style, via_use=False):
+        tag = el.tag.replace(SVG_NS, "")
+        if tag in _NOT_DRAWN and not via_use:
+            return
+        m = _matmul(m, _parse_transform(el.get("transform", "")))
+        style = dict(style)                       # SVG inheritance: fill, stroke, stroke-width
+        for k in ("fill", "stroke", "stroke-width"):
+            if el.get(k) is not None:
+                style[k] = el.get(k)
+        if tag == "use":
+            ref = ids.get((el.get(XLINK_HREF) or el.get("href") or "").lstrip("#"))
+            if ref is not None:
+                x, y = float(el.get("x", 0) or 0), float(el.get("y", 0) or 0)
+                walk(ref, _matmul(m, (1, 0, 0, 1, x, y)), style, via_use=True)
+            return
+        if tag == "path" and el.get("d"):
+            stroke = paint(style.get("stroke"))
+            try:
+                w = float(style.get("stroke-width", "1"))
+            except ValueError:
+                w = 1.0
+            scale = math.sqrt(abs(m[0] * m[3] - m[1] * m[2]))
+            polys = [[(lambda t: (t[0] / PT_PER_MM, t[1] / PT_PER_MM))(_apply(m, px, py)) for (px, py) in poly]
+                     for poly in _flatten_path(el.get("d"))]
+            out.append({"pts": [pl for pl in polys if len(pl) > 1], "stroke": stroke,
+                        "stroke_mm": (w * scale / PT_PER_MM) if stroke else None,
+                        "fill": paint(style.get("fill", "#000000"))})
+        for child in el:
+            walk(child, m, style)
+
+    walk(root, (1, 0, 0, 1, 0, 0), {"fill": "#000000", "stroke": "none", "stroke-width": "1"})
+    return [p for p in out if p["pts"]]
+
+
 def extract_vectors(path, page=1, cut_only=False):
     """Return {hexcolor: [polylines in mm]} from the PDF's vector content.
     cut_only keeps just the cut lines (hairline strokes, see CUT_STROKE_MAX_MM)."""

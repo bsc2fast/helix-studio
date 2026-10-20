@@ -6,6 +6,7 @@ const SVGNS = "http://www.w3.org/2000/svg";
 // machine config, and placement is always measured from the home corner.
 const GUT = 34;   // mm margin on each side, for the rulers
 const state = {
+  decode: { mode: "hairline", max_mm: 0.1, color: "#ff0000", plain: "all" },   // Settings → Cut lines (DECODE_DEFAULT)
   materials: [], machine: null, laserHost: "192.168.1.6",
   docs: [],           // imported PDFs, in the order they arrived:
                       //   {id, name, pages, pd: {n -> page geometry}}
@@ -96,6 +97,7 @@ async function boot() {
   ]);
   state.prefs = prefs || {};
   state.units = state.prefs.units === "in" ? "in" : "mm";
+  state.decode = { ...DECODE_DEFAULT, ...(state.prefs.decode || {}) };
   state.machine = cfg.machine;
   state.laserHost = cfg.laser_host;
   renderLaser();
@@ -922,8 +924,8 @@ function updatePlacement() {
     E.tag.textContent = pageTag(it);
     if (multi) E.tag.removeAttribute("hidden"); else E.tag.setAttribute("hidden", "hidden");
     if (!c) problems.push(`⚠ No printable artwork detected on ${pageName(it)}.`);
-    else if (comboOp && !(it.pd.cut_vectors || []).length)
-      problems.push(`⚠ No cut lines on ${pageName(it)} — engrave + cut only cuts hairline strokes (0.1 mm or thinner). Use an engrave preset, or draw the outlines to cut as hairlines.`);
+    else if (decodesCuts(currentOp()) && !cutLinesOf(it.pd).length)
+      problems.push(`⚠ No cut lines on ${pageName(it)} — ${decodeHint()} (Settings → Cut lines)${comboOp ? ", or use an engrave preset" : ""}.`);
     else if (!it.inBounds) problems.push(`⚠ ${multi ? cap(pageName(it)) + " is i" : "I"}nside the ${len(B.s)} ${unit()} safety margin. Move it within the dashed boundary.`);
     if (S && c && (ink.x < S.x - 0.01 || ink.y < S.y - 0.01 ||   // the ink, not the page frame
                    ink.x + ink.w > S.x + S.w + 0.01 || ink.y + ink.h > S.y + S.h + 0.01))
@@ -1134,6 +1136,35 @@ window.addEventListener("resize", endCornerPick);
 
 // ---------- material + preset dropdown ----------
 function currentMaterial() { return state.materials.find(m => m.name === $("#material").value) || null; }
+// ---------- decoding a page: which paths are cut lines ----------
+// The same rule as pdfjob.is_cut (Settings → Cut lines): hairline strokes, or
+// lines in the cut colour, or every stroked outline. Paths come from the page
+// data with their paint: {p: polylines, s: stroke colour, w: stroke mm, f: fill}.
+const DECODE_DEFAULT = { mode: "hairline", max_mm: 0.1, color: "#ff0000", plain: "all" };
+const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const colorNear = (a, b) => !!a && !!b && Math.hypot(...hexRgb(a).map((v, i) => v - hexRgb(b)[i])) <= 90;
+function isCutPath(q, d = state.decode) {
+  if (d.mode === "stroke") return q.s != null;
+  if (d.mode === "color") return q.s != null ? colorNear(q.s, d.color) : colorNear(q.f, d.color);
+  return q.s != null && q.w <= d.max_mm + 1e-9;
+}
+const cutLinesOf = pd => (pd.paths || []).filter(q => isCutPath(q)).flatMap(q => q.p);
+// what a send cuts: engrave + cut always cuts the decoded lines; a plain cut
+// does too when Settings say so, else every path (the classic behaviour)
+const decodesCuts = op => !!op && (op.type === "combo" || (op.type === "cut" && state.decode.plain === "decoded"));
+function decodeHint() {
+  const d = state.decode;
+  return d.mode === "color" ? `draw the outlines to cut in ${d.color}`
+    : d.mode === "stroke" ? "draw the outlines to cut as stroked lines, not fills"
+    : `draw the outlines to cut as hairlines (${len(d.max_mm)} ${unit()} or thinner)`;
+}
+// picker.js calls this when the decode setting changes
+window.hsDecodeChanged = () => {
+  savePrefs({ decode: state.decode });
+  highlight(); updatePlacement();
+  eta.key = ""; refreshEta();
+};
+
 // a preset is one operation ("3": an index into the material's list) or an
 // engrave + cut pair ("c1:4": engrave #1, then cut #4, in one job)
 function currentOp() {
@@ -1339,12 +1370,14 @@ function highlight() {
     // edge on wood, frosted white on acrylic…), at a fixed on-screen width,
     // gently pulsing (index.html)
     els.cutlines.setAttribute("stroke", L.mark);
-    // a plain cut follows every path; engrave + cut cuts only the hairlines
-    const mode = isCombo ? "hair" : "all";
+    // a plain cut follows every path (unless Settings say otherwise); engrave +
+    // cut follows the decode mode
+    const decoded = decodesCuts(op);
+    const mode = decoded ? "dec:" + JSON.stringify(state.decode) : "all";
     if (it.cutMode !== mode) {
       it.cutMode = mode;
       els.cutlines.innerHTML = "";
-      ((isCombo ? it.pd.cut_vectors : it.pd.vectors) || []).forEach(pl =>
+      ((decoded ? cutLinesOf(it.pd) : it.pd.vectors) || []).forEach(pl =>
         els.cutlines.appendChild(mk("polyline", { points: pl.map(p => p[0] + "," + p[1]).join(" "), fill: "none" })));
     }
     if (isCut || isCombo) els.cutlines.removeAttribute("hidden"); else els.cutlines.setAttribute("hidden", "hidden");
@@ -1398,7 +1431,7 @@ function refreshEta() {
   const op = currentOp();
   if (!op || !state.items.length || state.items.some(it => !it.pd.content_mm)) { eta.est = null; eta.key = ""; showEta(); return; }
   // what changes the measurement: the job type, its DPI, and the layout (rounded)
-  const key = JSON.stringify([op.type, (engraveOf(op) || {}).dpi || 0,
+  const key = JSON.stringify([op.type, (engraveOf(op) || {}).dpi || 0, decodesCuts(op) ? state.decode : 0,
     jobItems().map(i => [i.doc, i.page, i.rotation, Math.round(i.offset_mm[0]), Math.round(i.offset_mm[1])])]);
   if (key === eta.key) { showEta(); return; }
   eta.key = key; eta.est = null; showEta();
@@ -1407,7 +1440,8 @@ function refreshEta() {
   eta.timer = setTimeout(async () => {
     try {
       const r = await (await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: state.docs[0].id, operation: jobOperation(op), items: jobItems(), estimate_only: true }) })).json();
+        body: JSON.stringify({ id: state.docs[0].id, operation: jobOperation(op), items: jobItems(), estimate_only: true,
+                               decode: state.decode }) })).json();
       if (seq === eta.seq && r.estimate) { eta.est = r.estimate; showEta(); }
     } catch (e) {}
   }, 600);
@@ -1426,7 +1460,8 @@ $("#sendBtn").onclick = async () => {
   try {
     const data = await (await fetch("/api/send", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: state.docs[0].id, host: state.laserHost, operation, items, autofocus: false }),
+      body: JSON.stringify({ id: state.docs[0].id, host: state.laserHost, operation, items, autofocus: false,
+                             decode: state.decode }),
     })).json();
     if (data.error) out.textContent = "ERROR: " + data.error;
     else {

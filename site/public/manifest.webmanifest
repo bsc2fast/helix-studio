@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "Helix Studio",
+  "short_name": "Helix Studio",
+  "description": "A local web app for the Epilog Helix and Mini: lay out PDFs on your stock, preview the burn on the real material, then engrave and cut in one job.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#0a0e18",
+  "background_color": "#11131a",
+  "lang": "en",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

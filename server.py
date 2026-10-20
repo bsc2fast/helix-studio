@@ -82,6 +82,35 @@ PREF_SPEC = {
     "sheet_off": ("xy", None),     # where that sheet lies on the bed, mm
     "laser_host": ("host", 60),    # the laser adopted by a scan
     "units": ("text", 4),          # "mm" or "in" — display only, everything stays mm
+    "decode": ("decode", None),    # how a page splits into cut lines and engraving
+}
+
+
+def clean_decode(d):
+    """The decode setting (Settings → Cut lines), in a shape we trust:
+    mode hairline | color | stroke, the hairline width, the cut colour, and
+    whether plain Cut presets follow it ("decoded") or cut every path ("all")."""
+    d = d if isinstance(d, dict) else {}
+    out = dict(pdfjob.DECODE_DEFAULT, plain="all")
+    if d.get("mode") in pdfjob.DECODE_MODES:
+        out["mode"] = d["mode"]
+    try:
+        mm = float(d.get("max_mm", out["max_mm"]))
+        if math.isfinite(mm):
+            out["max_mm"] = round(min(2.0, max(0.01, mm)), 3)
+    except (TypeError, ValueError):
+        pass
+    if isinstance(d.get("color"), str) and HEX.fullmatch(d["color"]):
+        out["color"] = d["color"].lower()
+    if d.get("plain") in ("all", "decoded"):
+        out["plain"] = d["plain"]
+    return out
+
+
+DECODE_HINT = {
+    "hairline": "draw the outlines to cut as hairline strokes (%(max_mm)g mm or thinner)",
+    "color": "draw the outlines to cut in %(color)s (Settings → Cut lines)",
+    "stroke": "draw the outlines to cut as stroked lines, not fills",
 }
 
 
@@ -110,6 +139,8 @@ def clean_prefs(patch):
             out[k] = v
         elif kind == "host" and isinstance(v, str) and len(v) <= limit and re.fullmatch(r"[\w.\-:]+", v):
             out[k] = v
+        elif kind == "decode" and isinstance(v, dict):
+            out[k] = clean_decode(v)
         elif kind == "xy" and isinstance(v, dict):
             try:
                 xy = {a: round(float(v.get(a, 0)), 2) for a in ("x", "y")}
@@ -381,6 +412,33 @@ def estimate(kind, stats, speed):
                 seconds=round(a * n + b * l / max(1, speed)))
 
 
+def combo_burn_mask(pdf_path, page, dpi, dec, fast=False):
+    """The engraving for an engrave + cut job, before the cut lines are blanked:
+    every non-white pixel burns (fast_burn_mask for estimates — the same rule —
+    or the driver's own raster_from_colors for a real send). In colour mode every
+    pixel in the cut colour is knocked out too, so a thick red line leaves
+    nothing behind wherever its path sits."""
+    rgb = pdfjob.render_rgb(pdf_path, dpi=dpi, page=page).convert("RGB")
+    mask = fast_burn_mask(rgb) if fast else pdfjob.raster_from_colors(rgb, colors=None)
+    if dec["mode"] == "color":
+        target = tuple(int(dec["color"][i:i + 2], 16) for i in (1, 3, 5))
+        r, g, b = ImageChops.difference(rgb, Image.new("RGB", rgb.size, target)).split()
+        far = ImageChops.lighter(ImageChops.lighter(r, g), b)      # the largest channel difference
+        mask.paste(255, mask=far.point(lambda v: 255 if v <= 80 else 0))
+        # and its lighter tints — the anti-aliased edge where the line meets white
+        # paper, a few pixels that would each cost a whole sweep of the head:
+        # same hue, saturated at all, at least nearly as bright. A darker shade
+        # in the artwork (maroon beside red) is still engraved.
+        th, ts, tv = Image.new("RGB", (1, 1), target).convert("HSV").getpixel((0, 0))
+        if ts >= 40:   # a grey or black cut colour has no hue to match
+            hh, ss, vv = rgb.convert("HSV").split()
+            hue = hh.point(lambda h: 255 if min(abs(h - th), 256 - abs(h - th)) <= 12 else 0)
+            sat = ss.point(lambda v: 255 if v >= 3 else 0)    # a grey edge (black art) has none
+            lit = vv.point(lambda v: 255 if v >= tv * 0.85 else 0)
+            mask.paste(255, mask=ImageChops.multiply(ImageChops.multiply(hue, sat), lit))
+    return mask
+
+
 def fast_burn_mask(rgb):
     """The same rule as pdfjob.raster_from_colors(colors=None) — a pixel burns
     unless all three channels are > 245 — done with PIL instead of a Python
@@ -460,12 +518,14 @@ def load_page(s, n):
         vb = (min(x for x, _ in pts), min(y for _, y in pts), max(x for x, _ in pts), max(y for _, y in pts))
         bbox = vb if not bbox else (min(bbox[0], vb[0]), min(bbox[1], vb[1]),
                                     max(bbox[2], vb[2]), max(bbox[3], vb[3]))
-    try:   # the hairline strokes alone: what an engrave + cut job cuts
-        cutv = [pl for pls in pdfjob.extract_vectors(s["pdf_path"], page=n, cut_only=True).values() for pl in pls]
+    try:   # every path with its paint, so the page can decode cut lines under any mode
+        paths = [{"p": _simplify(q["pts"]), "s": q["stroke"],
+                  "w": round(q["stroke_mm"], 3) if q["stroke_mm"] is not None else None, "f": q["fill"]}
+                 for q in pdfjob.extract_paths(s["pdf_path"], n)]
     except Exception:
-        cutv = []
+        paths = []
     pg = {"rgb": rgb, "preview_png": buf.getvalue(),
-          "bbox": bbox, "vectors": _simplify(allv), "cut_vectors": _simplify(cutv),
+          "bbox": bbox, "vectors": _simplify(allv), "paths": [q for q in paths if q["p"]],
           "size_mm": (rgb.size[0] / PREVIEW_DPI * 25.4, rgb.size[1] / PREVIEW_DPI * 25.4),
           "images": page_images(s["pdf_path"], n)}
     s["pages"][n] = pg
@@ -507,7 +567,7 @@ def page_json(sid, n, pg):
             "w_mm": round(b[2] - b[0], 2), "h_mm": round(b[3] - b[1], 2),
         } if b else None,
         "vectors": pg["vectors"],
-        "cut_vectors": pg.get("cut_vectors", []),
+        "paths": pg.get("paths", []),
         "images": pg.get("images"),
     }
 
@@ -778,9 +838,11 @@ class Handler(BaseHTTPRequestHandler):
                     }, 400)
 
         op = req.get("operation")
+        # how a page splits into cut lines and engraving (Settings → Cut lines)
+        dec = clean_decode(req.get("decode"))
         # ---- engrave + cut in ONE job: the raster first, then the cuts ----
-        # The cut lines are the hairline strokes (pdfjob.CUT_STROKE_MAX_MM);
-        # everything else is engraved, with the hairlines blanked out of the
+        # The cut lines are what the decode mode says (pdfjob.is_cut);
+        # everything else is engraved, with the cut lines blanked out of the
         # raster so a line isn't engraved before it's cut. Both parts share the
         # job; the vector part's coordinates stay at 1200/in (epilog.build_job).
         if op and op.get("type") == "combo":
@@ -789,36 +851,41 @@ class Handler(BaseHTTPRequestHandler):
             vecs, masks, cuts = {}, [], []
             for p in placed:
                 if p["key"] not in vecs:
-                    vecs[p["key"]] = [pl for pls in pdfjob.extract_vectors(
-                        p["s"]["pdf_path"], page=p["page"], cut_only=True).values() for pl in pls]
+                    vecs[p["key"]] = [q for q in pdfjob.extract_paths(p["s"]["pdf_path"], p["page"])
+                                      if pdfjob.is_cut(q, dec)]
                 if not vecs[p["key"]]:
-                    return self._send_json({"error": "no cut lines on %s — draw the outlines to cut as "
-                                                     "hairline strokes (0.1 mm or thinner), or use an engrave "
-                                                     "preset" % where(p), "placement": placement}, 400)
+                    return self._send_json({"error": "no cut lines on %s — %s, or use an engrave preset"
+                                                     % (where(p), DECODE_HINT[dec["mode"]] % dec),
+                                            "placement": placement}, 400)
             for p in placed:
-                if estimate_only:
+                if estimate_only:   # cached per page, dpi and (colour mode) cut colour
                     cache = p["s"].setdefault("est_masks", {})
-                    ck = (p["page"], dpi)
+                    ck = (p["page"], dpi, "combo", dec["color"] if dec["mode"] == "color" else "")
                     if ck not in cache:
-                        cache[ck] = fast_burn_mask(pdfjob.render_rgb(p["s"]["pdf_path"], dpi=dpi, page=p["page"]))
+                        cache[ck] = combo_burn_mask(p["s"]["pdf_path"], p["page"], dpi, dec, fast=True)
                     full = cache[ck].copy()
                 else:
-                    full = pdfjob.raster_from_colors(
-                        pdfjob.render_rgb(p["s"]["pdf_path"], dpi=dpi, page=p["page"]), colors=None)
-                # blank the cut lines out of the engraving: a 0.4 mm band covers a
-                # 0.1 mm hairline, its anti-aliased edge, and the ~0.1 % scale
-                # pdftocairo gives stroked paths (so the line may sit ~0.08 mm off)
+                    full = combo_burn_mask(p["s"]["pdf_path"], p["page"], dpi, dec)
+                # blank the cut lines out of the engraving: a band as wide as the
+                # line plus 0.4 mm (at least 0.4 mm — the anti-aliased edge, and
+                # the ~0.1 % scale pdftocairo gives stroked paths, so a path can sit
+                # ~0.1–0.2 mm off its drawn line); a filled shape that is a cut (an
+                # outlined stroke) is blanked whole
                 draw = ImageDraw.Draw(full)
-                w = max(3, int(round(0.4 / 25.4 * dpi)))
-                for pl in vecs[p["key"]]:
-                    draw.line([(x / 25.4 * dpi, y / 25.4 * dpi) for x, y in pl], fill=255, width=w, joint="curve")
+                px = lambda pl: [(x / 25.4 * dpi, y / 25.4 * dpi) for x, y in pl]
+                for q in vecs[p["key"]]:
+                    w = max(3, int(round(max(0.4, (q["stroke_mm"] or 0) + 0.4) / 25.4 * dpi)))
+                    for pl in q["pts"]:
+                        if q["stroke"] is None and len(pl) > 2:
+                            draw.polygon(px(pl), fill=255)
+                        draw.line(px(pl), fill=255, width=w, joint="curve")
                 bx0, by0, bx1, by1 = p["bbox"]
                 cx0 = int(round(bx0 / 25.4 * dpi)); cy0 = int(round(by0 / 25.4 * dpi))
                 cx1 = int(round(bx1 / 25.4 * dpi)); cy1 = int(round(by1 / 25.4 * dpi))
                 masks.append((p, _rot_image(full.crop((cx0, cy0, cx1, cy1)), p["R"])))
                 cuts.extend([[(lambda rx, ry: (rx + p["ox"], ry + p["oy"]))(
                                   *_rot_point(x - bx0, y - by0, p["R"], p["cw"], p["ch"]))
-                              for (x, y) in pl] for pl in vecs[p["key"]]])
+                              for (x, y) in pl] for q in vecs[p["key"]] for pl in q["pts"]])
             ux = min(p["ox"] for p in placed)
             uy = min(p["oy"] for p in placed)
             U = lambda mm: epilog.mm2units(mm, dpi)
@@ -896,7 +963,11 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 polylines, vecs = [], {}
                 for p in placed:
-                    if p["key"] not in vecs:
+                    if p["key"] not in vecs and dec["plain"] == "decoded":
+                        # Settings → Cut lines → plain cuts follow the decode mode
+                        vecs[p["key"]] = [pl for q in pdfjob.extract_paths(p["s"]["pdf_path"], p["page"])
+                                          if pdfjob.is_cut(q, dec) for pl in q["pts"]]
+                    elif p["key"] not in vecs:
                         vecs[p["key"]] = [pl for pls in pdfjob.extract_vectors(
                             p["s"]["pdf_path"], page=p["page"]).values() for pl in pls]
                     bx0, by0 = p["bbox"][0], p["bbox"][1]

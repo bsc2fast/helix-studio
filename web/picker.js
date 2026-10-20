@@ -609,7 +609,89 @@ function viewPreset(sel) {
 // `git pull` never touches them.
 let stMat = null;
 function openSettings() { open($("#settingsBtn")); }
+// Settings has two tabs: Materials (colours + sizes) and Cut lines (decode mode)
+let stTab = "materials";
+const settingsTabs = () => `<div class="pk-tabs" role="tablist">${[["materials", "Materials"], ["cut", "✂ Cut lines"]]
+  .map(([k, label]) => `<button type="button" role="tab" data-sttab="${k}" aria-selected="${k === stTab}"
+    class="${k === stTab ? "on" : ""}">${label}</button>`).join("")}</div>`;
+const unitSeg = () => `<div class="seg" role="group" aria-label="Units">${["mm", "in"].map(u =>
+  `<button type="button" data-unit="${u}" class="${unit() === u ? "on" : ""}">${u}</button>`).join("")}</div>`;
+function wireSettingsCommon() {
+  panel.querySelectorAll("[data-close]").forEach(b => b.onclick = close);
+  panel.querySelectorAll("[data-sttab]").forEach(b => b.onclick = () => { stTab = b.dataset.sttab; renderSettings(); });
+  // units: display only — lengths everywhere switch, nothing stored changes
+  panel.querySelectorAll("[data-unit]").forEach(b => b.onclick = () => {
+    state.units = b.dataset.unit;
+    savePrefs({ units: state.units });
+    applyUnits(); renderSettings();
+  });
+}
+
+// ---------- Settings → Cut lines: how a page is decoded into cut + engrave ----------
+// Three ways designers mark what to cut; each card draws what it means: teal is
+// engraved, the dashed orange line is cut.
+const DECODE_ART = {
+  hairline: `<circle cx="100" cy="60" r="46" class="cut" stroke-width="1.6"/>
+    <circle cx="100" cy="60" r="31" class="eng-line" stroke-width="7"/>
+    <path class="eng" d="M100 40l6 13 14 2-10 10 3 14-13-7-13 7 3-14-10-10 14-2z"/>`,
+  color: `<circle cx="100" cy="60" r="46" class="cut" stroke-width="5"/>
+    <rect x="72" y="32" width="56" height="56" rx="4" class="eng-line" stroke-width="1.6"/>
+    <path class="eng" d="M100 44l5 11 12 2-9 8 2 12-10-6-10 6 2-12-9-8 12-2z"/>`,
+  stroke: `<circle cx="100" cy="60" r="46" class="cut" stroke-width="1.6"/>
+    <rect x="68" y="28" width="64" height="64" rx="6" class="cut" stroke-width="3"/>
+    <path class="eng" d="M86 46l5 11 12 2-9 8 2 12-10-6-10 6 2-12-9-8 12-2z"/>
+    <text x="113" y="71" text-anchor="middle" class="eng-text" style="font-size:15px">Aa</text>`,
+};
+const CUT_COLOURS = [["#ff0000", "Red"], ["#0000ff", "Blue"], ["#ff00ff", "Magenta"], ["#00ff00", "Green"]];
+function renderCutLines() {
+  const d = state.decode;
+  const cardFor = (mode, title, what, extra) => `<div class="dc-card ${d.mode === mode ? "on" : ""}" role="radio"
+      aria-checked="${d.mode === mode}" tabindex="0" data-mode="${mode}">
+    <svg viewBox="0 0 200 120" class="dc-art" aria-hidden="true">${DECODE_ART[mode]}</svg>
+    <div class="dc-body"><b>${title}</b><p>${what}</p>${extra}</div></div>`;
+  const cards = [
+    cardFor("hairline", "Hairline", "Strokes no wider than a hairline are cut. The usual Epilog habit: a 0.001 pt line.",
+      `<label class="dc-field">Thinner than <input type="number" data-dk="max_mm" step="${inches() ? 0.001 : 0.01}"
+        value="${inches() ? +(d.max_mm / INCH).toFixed(4) : d.max_mm}"> ${unit()}</label>`),
+    cardFor("color", "Colour", "Anything drawn in the cut colour is cut, however thick. Red is the common choice.",
+      `<div class="dc-field">${CUT_COLOURS.map(([c, n]) => `<button type="button" class="dc-swatch ${d.color === c ? "on" : ""}"
+          data-dc="${c}" title="${n}" style="background:${c}"></button>`).join("")}
+        <input type="color" data-dk="color" value="${d.color}" title="Any colour"></div>`),
+    cardFor("stroke", "Outline vs fill", "Every stroked line is cut; filled shapes and text are engraved.", ""),
+  ].join("");
+  panel.innerHTML = `<div class="pk-wrap">
+    ${headRow("Settings", "How a page splits into cut lines and engraving", unitSeg(),
+      "Used by <b>Engrave + cut</b> presets: the cut lines are cut, everything else is engraved, and the cut lines are " +
+      "left out of the engraving. Colours match within a small tolerance, so Illustrator's CMYK red counts as red. " +
+      "Choose below whether plain <b>Cut</b> presets follow this too, or cut every path as before.")}
+    ${settingsTabs()}
+    <div class="dc-grid" role="radiogroup" aria-label="Cut lines are">${cards}</div>
+    <div class="dc-legend"><span class="dc-k eng"></span>engraved <span class="dc-k cut"></span>cut</div>
+    <h2 class="pk-group">Plain Cut presets</h2>
+    <div class="seg dc-plain" role="group" aria-label="Plain cut presets cut">
+      <button type="button" data-plain="all" class="${d.plain !== "decoded" ? "on" : ""}">Cut every path</button>
+      <button type="button" data-plain="decoded" class="${d.plain === "decoded" ? "on" : ""}">Cut only the cut lines</button>
+    </div></div>`;
+  wireSettingsCommon();
+  const set = patch => { Object.assign(state.decode, patch); window.hsDecodeChanged && window.hsDecodeChanged(); };
+  panel.querySelectorAll(".dc-card").forEach(c => {
+    c.onclick = e => { if (e.target.closest("input,button")) return; set({ mode: c.dataset.mode }); renderCutLines(); };
+    c.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); c.click(); } };
+  });
+  panel.querySelectorAll("[data-dc]").forEach(b => b.onclick = () => { set({ mode: "color", color: b.dataset.dc }); renderCutLines(); });
+  const w = panel.querySelector('[data-dk="max_mm"]');
+  w.onchange = () => {
+    const v = (inches() ? INCH : 1) * parseFloat(w.value);
+    if (v >= 0.01 && v <= 2) set({ mode: "hairline", max_mm: Math.round(v * 1000) / 1000 });
+    renderCutLines();
+  };
+  panel.querySelector('[data-dk="color"]').oninput = e => { set({ mode: "color", color: e.target.value }); };
+  panel.querySelector('[data-dk="color"]').onchange = () => renderCutLines();
+  panel.querySelectorAll("[data-plain]").forEach(b => b.onclick = () => { set({ plain: b.dataset.plain }); renderCutLines(); });
+}
+
 function renderSettings() {
+  if (stTab === "cut") return renderCutLines();
   const mats = state.materials;
   if (!stMat || !mats.some(m => m.name === stMat)) stMat = $("#material").value || (mats[0] && mats[0].name);
   const nav = mats.map(m => {
@@ -642,11 +724,10 @@ function renderSettings() {
       <button type="button" class="st-del" data-del title="Remove this size">✕</button>
       <p class="st-err" ${tooBig(z) ? "" : "hidden"}>${tooBig(z) ? "Bigger than the bed — it won't be offered." : ""}</p></div>`).join("");
   panel.innerHTML = `<div class="pk-wrap">
-    ${headRow("Settings", "Material colours and sizes",
-      `<div class="seg" role="group" aria-label="Units">${["mm", "in"].map(u =>
-        `<button type="button" data-unit="${u}" class="${unit() === u ? "on" : ""}">${u}</button>`).join("")}</div>`,
+    ${headRow("Settings", "Material colours and sizes", unitSeg(),
       "Built-in colours (🔒) can't be changed; add your own beside them — the colour of the stock you buy and the colour a burn " +
       "leaves on it. The pattern (grain, weave, brushing) comes from the material. Saved to <code>finishes.json</code> beside the server.")}
+    ${settingsTabs()}
     <div class="st-grid"><nav class="st-nav">${nav}</nav><section class="st-main">
       <h2 class="pk-group">${esc(stMat)} · built-in</h2><div class="st-fins">${builtIn}</div>
       <h2 class="pk-group">${esc(stMat)} · your colours</h2>
@@ -656,14 +737,8 @@ function renderSettings() {
       <div class="st-rows">${sizeRows || `<p class="pk-sub">None yet.</p>`}</div>
       <button type="button" class="st-add" data-add-size>+ Add a size</button>
     </section></div></div>`;
-  panel.querySelectorAll("[data-close]").forEach(b => b.onclick = close);
+  wireSettingsCommon();
   panel.querySelectorAll(".st-mat").forEach(b => b.onclick = () => { stMat = b.dataset.m; renderSettings(); });
-  // units: display only — lengths everywhere switch, nothing stored changes
-  panel.querySelectorAll("[data-unit]").forEach(b => b.onclick = () => {
-    state.units = b.dataset.unit;
-    savePrefs({ units: state.units });
-    applyUnits(); renderSettings();
-  });
   panel.querySelector("[data-add]").onclick = () => {
     const taken = new Set(finishesOf(stMat));
     let n = 1; while (taken.has(`My colour ${n}`)) n++;

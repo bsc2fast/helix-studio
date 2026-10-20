@@ -222,10 +222,17 @@ as environment variables.
    **Engrave + cut** presets (where the material and thickness allow a cut)
    send **one job**: the engraving first, then the cut, so one GO does both.
    There's one per engrave style, each paired with the thinnest rated cut that
-   goes through the stock. Only **hairline strokes** (0.1 mm or thinner — e.g.
-   Illustrator's 0.001 pt) are cut; everything else is engraved, with the
-   hairlines left out of the engraving. Check a new setup with
-   `samples/engrave-cut-test.pdf` first.
+   goes through the stock. **Settings → Cut lines** chooses how a page splits
+   into cut lines and engraving:
+   - **Hairline** (default): strokes no wider than 0.1 mm (adjustable) are cut —
+     e.g. Illustrator's 0.001 pt line.
+   - **Colour**: anything drawn in the cut colour (default red, any thickness)
+     is cut; Illustrator's CMYK red counts.
+   - **Outline vs fill**: every stroked line is cut; fills and text engrave.
+
+   The cut lines are left out of the engraving. By default plain **Cut**
+   presets still cut every path; the same page can make them follow the decode
+   mode instead. Check a new setup with `samples/engrave-cut-test.pdf` first.
       **The bed shows the burn, not the PDF:** artwork is drawn on the stock as
    the laser will leave it, darker and deeper for harder presets. The raster is
    1-bit — every pixel that isn't near-white burns at full power — so greys and
