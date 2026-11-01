@@ -5,7 +5,8 @@ sends them to the Epilog Helix.
 
   GET  /                     -> web UI
   GET  /api/materials        -> materials.json (Epilog 30W suggested settings)
-  POST /api/import           -> body = raw PDF bytes; returns page count + page 1
+  POST /api/import           -> body = raw PDF bytes (or a .plt, imported as its cut
+                                paths); returns page count + page 1
   GET  /api/page/<id>/<n>    -> page n: preview url, content bbox, cut-line vectors
   GET  /preview/<id>/<n>.png -> page n rendered (/preview/<id>.png = page 1)
   GET  /thumb/<id>/<n>.png   -> small render of page n for the page rail
@@ -48,6 +49,7 @@ sys.path.insert(0, os.path.join(HERE, "driver"))
 import epilog          # noqa: E402
 import pdfjob          # noqa: E402
 import laserlink       # noqa: E402
+import pltpdf          # noqa: E402
 
 DEFAULT_PORT = 4060
 DEFAULT_BIND = "127.0.0.1"
@@ -707,8 +709,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_import(self):
         data = self._read_body()
+        if pltpdf.looks_like_hpgl(data):
+            # a cutter .plt: its pen-down paths become red hairline cut lines on a
+            # one-page PDF, then everything below runs as for any other PDF
+            try:
+                data = pltpdf.plt_to_pdf(data)
+            except ValueError as e:
+                return self._send_json({"error": str(e)}, 400)
         if not data[:4] == b"%PDF":
-            return self._send_json({"error": "not a PDF"}, 400)
+            return self._send_json({"error": "not a PDF or .plt"}, 400)
         sid = uuid.uuid4().hex[:12]
         pdf_path = os.path.join(TMPDIR, sid + ".pdf")
         with open(pdf_path, "wb") as f:

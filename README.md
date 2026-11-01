@@ -179,6 +179,9 @@ as environment variables.
    best; the page is cropped to its ink, so whitespace around the design is
    ignored. Drop **several PDFs**, or add more later with **+ PDF** — they all
    stay open, listed down the left, and one job can mix pages from any of them.
+   A cutter **`.plt`** (HPGL, e.g. from Kerf or SignMaster) works too: its cut
+   paths come in as red hairlines, so a Cut preset cuts along them and an
+   Engrave preset burns them as fine lines.
 2. **Place it.** Drag the artwork around the bed picture, or type X/Y in mm.
    X/Y is measured from the laser's home corner (top-left). `Rotate` turns it
    in 90° steps, `Center` centres it in the safe area. Hovering a page shows its

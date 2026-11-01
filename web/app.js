@@ -439,6 +439,7 @@ function syncPanel() {
 // session; an item on the bed remembers which one it came from.
 const drop = $("#drop"), fileInput = $("#file"), addHint = $("#addHint");
 const isPdf = f => f && (f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+const isPlt = f => f && /\.(plt|hpgl?|hpg)$/i.test(f.name);   // cutter files: imported as cut lines
 const hasFiles = e => [...(e.dataTransfer ? e.dataTransfer.types : [])].includes("Files");
 
 drop.onclick = () => fileInput.click();
@@ -462,7 +463,7 @@ function endDrag() { addHint.hidden = true; drop.classList.remove("hot"); }
 
 // imported one after another so the page rail (and the bed) fill in order
 function importFiles(list) {
-  const pdfs = [...list].filter(isPdf);
+  const pdfs = [...list].filter(f => isPdf(f) || isPlt(f));
   if (pdfs.length) pdfs.reduce((p, f) => p.then(() => importPdf(f)), Promise.resolve());
 }
 
@@ -471,7 +472,7 @@ function dropMsg(big, hint, bad) {
   $("#dropHint").textContent = hint;
   $("#dropHint").className = bad ? "warn" : "hint";
 }
-const DROP_IDLE = ["Drop PDFs", "or click to choose"];
+const DROP_IDLE = ["Drop PDFs", "or a cutter .plt · click to choose"];
 
 async function importPdf(file) {
   const first = !state.docs.length;
@@ -481,12 +482,12 @@ async function importPdf(file) {
     const buf = await file.arrayBuffer();
     data = await (await fetch("/api/import", {
       method: "POST",
-      headers: { "Content-Type": "application/pdf", "X-Filename": encodeURIComponent(file.name) },
+      headers: { "Content-Type": isPlt(file) ? "application/octet-stream" : "application/pdf", "X-Filename": encodeURIComponent(file.name) },
       body: buf,
     })).json();
   } catch (e) { data = { error: e.message }; }
   if (data.error) {
-    if (first) dropMsg("Couldn't read that PDF", data.error, true);
+    if (first) dropMsg(`Couldn't read that ${isPlt(file) ? ".plt" : "PDF"}`, data.error, true);
     else alert(`${file.name}: ${data.error}`);
     return;
   }
