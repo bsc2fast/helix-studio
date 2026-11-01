@@ -213,6 +213,10 @@
     background:color-mix(in srgb, var(--accent2) 7%, transparent)}
   .drop .big{font-size:15px;font-weight:600;color:var(--ink);margin:0}
   .drop p{margin:0}
+  .drop .kinds{display:flex;gap:6px;margin:4px 0 2px}
+  .drop .kinds i{font-style:normal;font-size:10.5px;font-weight:700;letter-spacing:.05em;padding:2px 8px;
+    border-radius:999px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
+  .drop .kinds[hidden]{display:none}
   .hint{color:var(--muted);font-size:12px}
 
   /* ---- floating controls (bottom-right) ---- */
@@ -508,15 +512,16 @@
     <div class="cardbar">Artwork</div>
     <div class="box">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M12 18v-6M9 15l3-3 3 3"/></svg>
-      <p class="big" id="dropBig">Drop PDFs</p>
-      <p class="hint" id="dropHint">or a cutter .plt · click to choose</p>
+      <p class="big" id="dropBig">Drop a file</p>
+      <span class="kinds" id="dropKinds"><i>PDF</i><i>PLT</i></span>
+      <p class="hint" id="dropHint">or click to choose</p>
     </div>
   </div>
   <div class="bedwrap">
     <svg id="bed" preserveAspectRatio="xMidYMid meet"></svg>
     <div class="cornerpick" id="cornerPick" hidden></div>
     <!-- shown while a file is dragged over the window with pages already on the bed -->
-    <div class="addhint" id="addHint" hidden><div class="box">Drop to add another PDF</div></div>
+    <div class="addhint" id="addHint" hidden><div class="box">Drop to add another file</div></div>
   </div>
   <input type="file" id="file" accept="application/pdf,.plt,.hpgl,.hpg" multiple hidden />
 

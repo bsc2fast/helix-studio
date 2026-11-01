@@ -471,8 +471,9 @@ function dropMsg(big, hint, bad) {
   $("#dropBig").textContent = big;
   $("#dropHint").textContent = hint;
   $("#dropHint").className = bad ? "warn" : "hint";
+  $("#dropKinds").hidden = big !== DROP_IDLE[0];   // format chips only on the idle prompt
 }
-const DROP_IDLE = ["Drop PDFs", "or a cutter .plt · click to choose"];
+const DROP_IDLE = ["Drop a file", "or click to choose"];
 
 async function importPdf(file) {
   const first = !state.docs.length;
